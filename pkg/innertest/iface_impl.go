@@ -6,17 +6,20 @@
 //
 // Author: Chef (191201771@qq.com)
 
-package logic
+package innertest
 
 import (
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/hls"
 	"github.com/q191201771/lal/pkg/httpflv"
 	"github.com/q191201771/lal/pkg/httpts"
+	"github.com/q191201771/lal/pkg/logic"
 	"github.com/q191201771/lal/pkg/remux"
 	"github.com/q191201771/lal/pkg/rtmp"
 	"github.com/q191201771/lal/pkg/rtsp"
 )
+
+// TODO(chef): refactor 有的interface以I开头，有的不是
 
 // TODO(chef): 整理所有Server类型Session的生命周期管理
 //   -
@@ -33,6 +36,22 @@ import (
 // other:       rtmp.ClientSession, rtmp.ServerSession
 //              rtsp.BaseInSession, rtsp.BaseOutSession, rtsp.ClientCommandSession, rtsp.ServerCommandSessionS
 //              base.HttpSubSession
+
+// ISessionUrlContext 实际测试
+//
+// |                | 实际url                                               | Url()    | AppName, StreamName, RawQuery  |
+// | -              | -                                                    | -        | -                              |
+// | rtmp pub推流    | rtmp://127.0.0.1:1935/live/test110                   | 同实际url | live, test110,                 |
+// |                | rtmp://127.0.0.1:1935/a/b/c/d/test110?p1=1&p2=2      | 同实际url | a/b, c/d/test110, p1=1&p2=2    |
+// | rtsp pub推流    | rtsp://localhost:5544/live/test110                   | 同实际url | live, test110,                 |
+// | rtsp pub推流    | rtsp://localhost:5544/a/b/c/d/test110?p1=1&p2=2      | 同实际url | a/b/c/d, test110, p1=1&p2=2    |
+// | httpflv sub拉流  | http://127.0.0.1:8080/live/test110.flv              | 同实际url | live, test110,                 |
+// |                 | http://127.0.0.1:8080/a/b/c/d/test110.flv?p1=1&p2=2 | 同实际url | a/b/c/d, test110, p1=1&p2=2    |
+// | rtmp sub拉流    | 同rtmp pub                                           | .        | .                              |
+// | rtsp sub拉流    | 同rtsp pub                                           | .        | .                              |
+// | httpts sub拉流 | 同httpflv sub，只是末尾的.flv换成.ts，不再赘述             | .       | .                              |
+
+//
 
 // IClientSession: 所有Client Session都满足
 var (
@@ -150,19 +169,24 @@ var (
 
 // ---------------------------------------------------------------------------------------------------------------------
 
-var _ rtmp.ServerObserver = &ServerManager{}
-var _ rtsp.ServerObserver = &ServerManager{}
-var _ HttpServerHandlerObserver = &ServerManager{}
+var _ logic.ILalServer = &logic.ServerManager{}
+var _ rtmp.ServerObserver = &logic.ServerManager{}
+var _ logic.HttpServerHandlerObserver = &logic.ServerManager{}
+var _ rtsp.ServerObserver = &logic.ServerManager{}
+var _ logic.IGroupCreator = &logic.ServerManager{}
+var _ logic.GroupObserver = &logic.ServerManager{}
 
-var _ HttpApiServerObserver = &ServerManager{}
+var _ logic.INotifyHandler = &logic.HttpNotify{}
+var _ logic.IGroupManager = &logic.SimpleGroupManager{}
+var _ logic.IGroupManager = &logic.ComplexGroupManager{}
 
-var _ rtmp.PubSessionObserver = &Group{} //
-var _ rtsp.PullSessionObserver = &Group{}
+var _ rtmp.PubSessionObserver = &logic.Group{} //
+var _ rtsp.PullSessionObserver = &logic.Group{}
 var _ rtsp.PullSessionObserver = &remux.AvPacket2RtmpRemuxer{}
-var _ rtsp.PubSessionObserver = &Group{}
+var _ rtsp.PubSessionObserver = &logic.Group{}
 var _ rtsp.PubSessionObserver = &remux.AvPacket2RtmpRemuxer{}
-var _ hls.MuxerObserver = &Group{}
-var _ rtsp.BaseInSessionObserver = &Group{} //
+var _ hls.MuxerObserver = &logic.Group{}
+var _ rtsp.BaseInSessionObserver = &logic.Group{} //
 var _ rtsp.BaseInSessionObserver = &remux.AvPacket2RtmpRemuxer{}
 
 var _ rtmp.ServerSessionObserver = &rtmp.Server{}

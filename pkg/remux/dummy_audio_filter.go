@@ -6,18 +6,21 @@
 //
 // Author: Chef (191201771@qq.com)
 
-package logic
+package remux
 
 import (
+	"math"
+
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/rtmp"
 	"github.com/q191201771/naza/pkg/nazalog"
-	"math"
 )
 
-const dummyAudioFilterStageAnalysis = 1
-const dummyAudioFilterStageNormal = 2
-const dummyAudioFilterStageDummy = 3
+const (
+	dummyAudioFilterStageAnalysis = 1
+	dummyAudioFilterStageNormal   = 2
+	dummyAudioFilterStageDummy    = 3
+)
 
 type DummyAudioFilter struct {
 	uk          string
