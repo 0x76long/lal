@@ -53,6 +53,7 @@ func main() {
 		option.AssertBehavior = nazalog.AssertFatal
 	})
 	defer nazalog.Sync()
+	base.LogoutStartInfo()
 
 	var mu sync.Mutex
 	tagKey2writeTime := make(map[string]time.Time)
@@ -101,10 +102,10 @@ func main() {
 		nazalog.Info("pull flv succ.")
 		defer httpflvPullSession.Dispose()
 	case PullTypeRtmp:
-		rtmpPullSession = rtmp.NewPullSession()
-		err = rtmpPullSession.Pull(pullUrl, func(msg base.RtmpMsg) {
+		rtmpPullSession = rtmp.NewPullSession().WithOnReadRtmpAvMsg(func(msg base.RtmpMsg) {
 			handleReadPayloadFn(msg.Payload)
 		})
+		err = rtmpPullSession.Pull(pullUrl)
 		if err != nil {
 			nazalog.Fatalf("pull rtmp failed. err=%+v", err)
 		}
@@ -130,7 +131,7 @@ func main() {
 	}()
 
 	// 读取flv文件
-	flvFilePump := httpflv.NewFileFilePump(func(option *httpflv.FlvFilePumpOption) {
+	flvFilePump := httpflv.NewFlvFilePump(func(option *httpflv.FlvFilePumpOption) {
 		option.IsRecursive = false
 	})
 	err = flvFilePump.Pump(filename, func(tag httpflv.Tag) bool {

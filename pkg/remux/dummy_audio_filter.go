@@ -13,7 +13,6 @@ import (
 
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/rtmp"
-	"github.com/q191201771/naza/pkg/nazalog"
 )
 
 const (
@@ -56,7 +55,6 @@ func (filter *DummyAudioFilter) OnReadRtmpAvMsg(msg base.RtmpMsg) {
 }
 
 func (filter *DummyAudioFilter) Feed(msg base.RtmpMsg) {
-	//nazalog.Debugf("trace_DummyAudioFilter, push. header=%+v, payload=%s, stage=%d", msg.Header, hex.EncodeToString(nazastring.SubSliceSafety(msg.Payload, 8)), filter.stage)
 	switch filter.stage {
 	case dummyAudioFilterStageAnalysis:
 		filter.handleAnalysisStage(msg)
@@ -104,7 +102,7 @@ func (filter *DummyAudioFilter) handleAnalysisStage(msg base.RtmpMsg) {
 		}
 
 		// 达到阈值
-		nazalog.Debugf("[%s] start make dummy audio.", filter.uk)
+		Log.Debugf("[%s] start make dummy audio.", filter.uk)
 		filter.stage = dummyAudioFilterStageDummy
 		for i := range filter.earlyStageQueue {
 			filter.handleDummyStage(filter.earlyStageQueue[i])
@@ -123,7 +121,7 @@ func (filter *DummyAudioFilter) handleNormalStage(msg base.RtmpMsg) {
 func (filter *DummyAudioFilter) handleDummyStage(msg base.RtmpMsg) {
 	if msg.Header.MsgTypeId == base.RtmpTypeIdAudio {
 		// 由于我们已经开始制造静音包了，静音包的编码参数可能会和实际音频参数不一致，所以我们只能过滤掉原始的音频数据了
-		nazalog.Warnf("[%s] recv audio but we are making dummy audio.", filter.uk)
+		Log.Warnf("[%s] recv audio but we are making dummy audio.", filter.uk)
 		return
 	}
 
@@ -170,7 +168,6 @@ func (filter *DummyAudioFilter) clearCache() {
 }
 
 func (filter *DummyAudioFilter) onPopProxy(msg base.RtmpMsg) {
-	//nazalog.Debugf("trace_DummyAudioFilter, onPopProxy. header=%+v, payload=%s, stage=%d", msg.Header, hex.EncodeToString(nazastring.SubSliceSafety(msg.Payload, 8)), filter.stage)
 	if filter.onPop != nil {
 		filter.onPop(msg)
 	}

@@ -17,8 +17,8 @@ import (
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/remux"
 	"github.com/q191201771/lal/pkg/rtmp"
+	"github.com/q191201771/naza/pkg/nazabytes"
 	"github.com/q191201771/naza/pkg/nazalog"
-	"github.com/q191201771/naza/pkg/nazastring"
 	"github.com/q191201771/naza/pkg/unique"
 )
 
@@ -166,7 +166,7 @@ func (t *Tunnel) Start() (ret ErrorCode) {
 					currHeader := remux.MakeDefaultRtmpHeader(m.Header)
 					chunks := rtmp.Message2Chunks(m.Payload, &currHeader)
 					if debugWriteCount < maxDebugWriteCount {
-						nazalog.Infof("[%s] write. header=%+v, %+v, %s", t.uk, m.Header, currHeader, hex.Dump(nazastring.SubSliceSafety(m.Payload, 32)))
+						nazalog.Infof("[%s] write. header=%+v, %+v, %s", t.uk, m.Header, currHeader, hex.Dump(nazabytes.Prefix(m.Payload, 32)))
 						debugWriteCount++
 					}
 
@@ -214,13 +214,13 @@ func (t *Tunnel) Start() (ret ErrorCode) {
 
 	t.pullSession = rtmp.NewPullSession(func(option *rtmp.PullSessionOption) {
 		option.PullTimeoutMs = pullTimeoutMs
-	})
-	nazalog.Infof("[%s] start pull. [%s] url=%s", t.uk, t.pullSession.UniqueKey(), t.inUrl)
-
-	err := t.pullSession.Pull(t.inUrl, func(msg base.RtmpMsg) {
+	}).WithOnReadRtmpAvMsg(func(msg base.RtmpMsg) {
 		m := msg.Clone()
 		t.rtmpMsgQ <- m
 	})
+	nazalog.Infof("[%s] start pull. [%s] url=%s", t.uk, t.pullSession.UniqueKey(), t.inUrl)
+
+	err := t.pullSession.Pull(t.inUrl)
 	// pull失败就直接退出
 	if err != nil {
 		nazalog.Errorf("[%s] pull error. [%s] err=%+v", t.uk, t.pullSession.UniqueKey(), err)

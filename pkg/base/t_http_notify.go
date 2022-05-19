@@ -10,19 +10,19 @@ package base
 
 // 文档见： https://pengrl.com/p/20101/
 
-const HttpNotifyVersion = "v0.1.0"
-
 type SessionEventCommonInfo struct {
-	Protocol      string `json:"protocol"`
-	SessionId     string `json:"session_id"`
-	RemoteAddr    string `json:"remote_addr"`
-	ServerId      string `json:"server_id"`
-	Url           string `json:"url"`
-	AppName       string `json:"app_name"`
-	StreamName    string `json:"stream_name"`
-	UrlParam      string `json:"url_param"`
-	HasInSession  bool   `json:"has_in_session"`
-	HasOutSession bool   `json:"has_out_session"`
+	ServerId string `json:"server_id"`
+
+	SessionId  string `json:"session_id"`
+	Url        string `json:"url"`
+	Protocol   string `json:"protocol"`
+	AppName    string `json:"app_name"`
+	StreamName string `json:"stream_name"`
+	UrlParam   string `json:"url_param"`
+	RemoteAddr string `json:"remote_addr"`
+
+	HasInSession  bool `json:"has_in_session"`
+	HasOutSession bool `json:"has_out_session"`
 }
 
 type UpdateInfo struct {
@@ -43,6 +43,14 @@ type SubStartInfo struct {
 }
 
 type SubStopInfo struct {
+	SessionEventCommonInfo
+}
+
+type PullStartInfo struct {
+	SessionEventCommonInfo
+}
+
+type PullStopInfo struct {
 	SessionEventCommonInfo
 }
 

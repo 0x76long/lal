@@ -6,6 +6,7 @@
 //
 // Author: Chef (191201771@qq.com)
 
+//go:build linux || darwin || netbsd || freebsd || openbsd || dragonfly
 // +build linux darwin netbsd freebsd openbsd dragonfly
 
 package base
@@ -14,8 +15,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-
-	log "github.com/q191201771/naza/pkg/nazalog"
 )
 
 // RunSignalHandler 监听SIGUSR1和SIGUSR2信号并回调
@@ -23,9 +22,9 @@ import (
 // TODO(chef): refactor 函数名应与SIGUSR1挂钩
 //
 func RunSignalHandler(cb func()) {
-	c := make(chan os.Signal)
+	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGUSR1, syscall.SIGUSR2)
 	s := <-c
-	log.Infof("recv signal. s=%+v", s)
+	Log.Infof("recv signal. s=%+v", s)
 	cb()
 }

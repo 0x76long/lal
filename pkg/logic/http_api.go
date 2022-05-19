@@ -10,13 +10,14 @@ package logic
 
 import (
 	"encoding/json"
+	"github.com/q191201771/naza/pkg/nazajson"
+	"io/ioutil"
 	"net"
 	"net/http"
 
 	"github.com/q191201771/naza/pkg/nazahttp"
 
 	"github.com/q191201771/lal/pkg/base"
-	"github.com/q191201771/naza/pkg/nazalog"
 )
 
 type HttpApiServer struct {
@@ -37,19 +38,19 @@ func (h *HttpApiServer) Listen() (err error) {
 	if h.ln, err = net.Listen("tcp", h.addr); err != nil {
 		return
 	}
-	nazalog.Infof("start httpapi server listen. addr=%s", h.addr)
+	Log.Infof("start http-api server listen. addr=%s", h.addr)
 	return
 }
 
 func (h *HttpApiServer) RunLoop() error {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/api/list", h.apiListHandler)
 	mux.HandleFunc("/api/stat/lal_info", h.statLalInfoHandler)
 	mux.HandleFunc("/api/stat/group", h.statGroupHandler)
 	mux.HandleFunc("/api/stat/all_group", h.statAllGroupHandler)
-	mux.HandleFunc("/api/ctrl/start_pull", h.ctrlStartPullHandler)
-	mux.HandleFunc("/api/ctrl/kick_out_session", h.ctrlKickOutSessionHandler)
+	mux.HandleFunc("/api/ctrl/start_relay_pull", h.ctrlStartRelayPullHandler)
+	mux.HandleFunc("/api/ctrl/stop_relay_pull", h.ctrlStopRelayPullHandler)
+	mux.HandleFunc("/api/ctrl/kick_session", h.ctrlKickSessionHandler)
 
 	var srv http.Server
 	srv.Handler = mux
@@ -57,6 +58,8 @@ func (h *HttpApiServer) RunLoop() error {
 }
 
 // TODO chef: dispose
+
+// ---------------------------------------------------------------------------------------------------------------------
 
 func (h *HttpApiServer) statLalInfoHandler(w http.ResponseWriter, req *http.Request) {
 	var v base.ApiStatLalInfo
@@ -100,74 +103,78 @@ func (h *HttpApiServer) statGroupHandler(w http.ResponseWriter, req *http.Reques
 	return
 }
 
-func (h *HttpApiServer) ctrlStartPullHandler(w http.ResponseWriter, req *http.Request) {
-	var v base.HttpResponseBasic
-	var info base.ApiCtrlStartPullReq
+// ---------------------------------------------------------------------------------------------------------------------
 
-	err := nazahttp.UnmarshalRequestJsonBody(req, &info, "protocol", "addr", "app_name", "stream_name")
+func (h *HttpApiServer) ctrlStartRelayPullHandler(w http.ResponseWriter, req *http.Request) {
+	var v base.ApiCtrlStartRelayPull
+	var info base.ApiCtrlStartRelayPullReq
+
+	j, err := unmarshalRequestJsonBody(req, info, "url")
 	if err != nil {
-		nazalog.Warnf("http api start pull error. err=%+v", err)
+		Log.Warnf("http api start pull error. err=%+v", err)
 		v.ErrorCode = base.ErrorCodeParamMissing
 		v.Desp = base.DespParamMissing
 		feedback(v, w)
 		return
 	}
-	nazalog.Infof("http api start pull. req info=%+v", info)
 
-	h.sm.CtrlStartPull(info)
-	v.ErrorCode = base.ErrorCodeSucc
-	v.Desp = base.DespSucc
-	feedback(v, w)
-	return
-}
-
-func (h *HttpApiServer) ctrlKickOutSessionHandler(w http.ResponseWriter, req *http.Request) {
-	var v base.HttpResponseBasic
-	var info base.ApiCtrlKickOutSession
-
-	err := nazahttp.UnmarshalRequestJsonBody(req, &info, "stream_name", "session_id")
-	if err != nil {
-		nazalog.Warnf("http api kick out session error. err=%+v", err)
-		v.ErrorCode = base.ErrorCodeParamMissing
-		v.Desp = base.DespParamMissing
-		feedback(v, w)
-		return
+	if !j.Exist("pull_timeout_ms") {
+		info.PullTimeoutMs = 5000
 	}
-	nazalog.Infof("http api kick out session. req info=%+v", info)
+	if !j.Exist("pull_retry_num") {
+		info.PullRetryNum = base.PullRetryNumNever
+	}
+	if !j.Exist("auto_stop_pull_after_no_out_ms") {
+		info.AutoStopPullAfterNoOutMs = base.AutoStopPullAfterNoOutMsNever
+	}
+	if !j.Exist("rtsp_mode") {
+		info.RtspMode = base.RtspModeTcp
+	}
 
-	resp := h.sm.CtrlKickOutSession(info)
+	Log.Infof("http api start pull. req info=%+v", info)
+
+	resp := h.sm.CtrlStartRelayPull(info)
 	feedback(resp, w)
 	return
 }
 
-func (h *HttpApiServer) apiListHandler(w http.ResponseWriter, req *http.Request) {
-	// TODO chef: 写完api list页面
-	b := []byte(`
-<html>
-<head><title>lal http api list</title></head>
-<body>
-<br>
-<br>
-<p>api接口列表：</p>
-<ul>
-	<li><a href="/api/list">/api/list</a></li>
-	<li><a href="/api/stat/group?stream_name=test110">/api/stat/group?stream_name=test110</a></li>
-	<li><a href="/api/stat/all_group">/api/stat/all_group</a></li>
-	<li><a href="/api/stat/lal_info">/api/stat/lal_info</a></li>
-	<li><a href="/api/ctrl/start_pull?protocol=rtmp&addr=127.0.0.1:1935&app_name=live&stream_name=test110&url_param=token=aaa">/api/ctrl/start_pull?protocol=rtmp&addr=127.0.0.1:1935&app_name=live&stream_name=test110&url_param=token=aaa</a></li>
-</ul>
-<br>
-<p>其他链接：</p>
-<ul>
-	<li><a href="https://pengrl.com/p/20100/">lal http api接口说明文档</a></li>
-	<li><a href="https://github.com/q191201771/lal">lal github地址</a></li>
-</ul>
-</body>
-</html>
-`)
+func (h *HttpApiServer) ctrlStopRelayPullHandler(w http.ResponseWriter, req *http.Request) {
+	var v base.ApiCtrlStopRelayPull
 
-	w.Header().Add("Server", base.LalHttpApiServer)
-	_, _ = w.Write(b)
+	q := req.URL.Query()
+	streamName := q.Get("stream_name")
+	if streamName == "" {
+		v.ErrorCode = base.ErrorCodeParamMissing
+		v.Desp = base.DespParamMissing
+		feedback(v, w)
+		return
+	}
+
+	Log.Infof("http api stop pull. stream_name=%s", streamName)
+
+	resp := h.sm.CtrlStopRelayPull(streamName)
+	feedback(resp, w)
+	return
+}
+
+func (h *HttpApiServer) ctrlKickSessionHandler(w http.ResponseWriter, req *http.Request) {
+	var v base.HttpResponseBasic
+	var info base.ApiCtrlKickSession
+
+	_, err := unmarshalRequestJsonBody(req, &info, "stream_name", "session_id")
+	if err != nil {
+		Log.Warnf("http api kick out session error. err=%+v", err)
+		v.ErrorCode = base.ErrorCodeParamMissing
+		v.Desp = base.DespParamMissing
+		feedback(v, w)
+		return
+	}
+
+	Log.Infof("http api kick out session. req info=%+v", info)
+
+	resp := h.sm.CtrlKickSession(info)
+	feedback(resp, w)
+	return
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -176,4 +183,24 @@ func feedback(v interface{}, w http.ResponseWriter) {
 	resp, _ := json.Marshal(v)
 	w.Header().Add("Server", base.LalHttpApiServer)
 	_, _ = w.Write(resp)
+}
+
+// TODO(chef): 搬到naza中
+func unmarshalRequestJsonBody(r *http.Request, info interface{}, keyFieldList ...string) (nazajson.Json, error) {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		return nazajson.Json{}, err
+	}
+
+	j, err := nazajson.New(body)
+	if err != nil {
+		return j, err
+	}
+	for _, kf := range keyFieldList {
+		if !j.Exist(kf) {
+			return j, nazahttp.ErrParamMissing
+		}
+	}
+
+	return j, json.Unmarshal(body, info)
 }

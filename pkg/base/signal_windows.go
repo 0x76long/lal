@@ -6,10 +6,11 @@
 //
 // Author: Chef (191201771@qq.com)
 
+//go:build windows
 // +build windows
 
 package base
 
 func RunSignalHandler(cb func()) {
-
+	// noop
 }
