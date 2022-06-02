@@ -29,14 +29,11 @@ import (
 // ClientSession rtmp 客户端类型连接的底层实现
 // package rtmp 的使用者应该优先使用基于 ClientSession 实现的 PushSession 和 PullSession
 type ClientSession struct {
-	uniqueKey string
-
 	onDoResult func()
 
 	// 只有PullSession使用
 	onReadRtmpAvMsg OnReadRtmpAvMsg
 
-	t      ClientSessionType
 	option ClientSessionOption
 
 	packer        *MessagePacker
@@ -45,12 +42,11 @@ type ClientSession struct {
 	hc            IHandshakeClient
 
 	conn                  connection.Connection
-	prevConnStat          connection.Stat
-	staleStat             *connection.Stat
-	stat                  base.StatSession
 	doResultChan          chan struct{}
 	errChan               chan error
 	hasNotifyDoResultSucc bool
+
+	sessionStat base.BasicSessionStat
 
 	debugLogReadUserCtrlMsgCount int
 	debugLogReadUserCtrlMsgMax   int
@@ -67,13 +63,6 @@ type AuthInfo struct {
 	salt      string
 	opaque    string
 }
-
-type ClientSessionType int
-
-const (
-	CstPullSession ClientSessionType = iota
-	CstPushSession
-)
 
 type ClientSessionOption struct {
 	// 单位毫秒，如果为0，则没有超时
@@ -104,15 +93,7 @@ var defaultClientSessOption = ClientSessionOption{
 type ModClientSessionOption func(option *ClientSessionOption)
 
 // NewClientSession @param t: session的类型，只能是推或者拉
-func NewClientSession(t ClientSessionType, modOptions ...ModClientSessionOption) *ClientSession {
-	var uk string
-	switch t {
-	case CstPullSession:
-		uk = base.GenUkRtmpPullSession()
-	case CstPushSession:
-		uk = base.GenUkRtmpPushSession()
-	}
-
+func NewClientSession(sessionType base.SessionType, modOptions ...ModClientSessionOption) *ClientSession {
 	option := defaultClientSessOption
 	for _, fn := range modOptions {
 		fn(&option)
@@ -126,30 +107,24 @@ func NewClientSession(t ClientSessionType, modOptions ...ModClientSessionOption)
 	}
 
 	s := &ClientSession{
-		uniqueKey:       uk,
-		onDoResult:      defaultOnPullResult,
-		onReadRtmpAvMsg: defaultOnReadRtmpAvMsg,
-		t:               t,
-		option:          option,
-		doResultChan:    make(chan struct{}, 1),
-		packer:          NewMessagePacker(),
-		chunkComposer:   NewChunkComposer(),
-		stat: base.StatSession{
-			Protocol:  base.ProtocolRtmp,
-			SessionId: uk,
-			StartTime: base.ReadableNowTime(),
-		},
+		onDoResult:                 defaultOnPullResult,
+		onReadRtmpAvMsg:            defaultOnReadRtmpAvMsg,
+		option:                     option,
+		doResultChan:               make(chan struct{}, 1),
+		packer:                     NewMessagePacker(),
+		chunkComposer:              NewChunkComposer(),
+		sessionStat:                base.NewBasicSessionStat(sessionType, ""),
 		debugLogReadUserCtrlMsgMax: 5,
 		hc:                         hc,
 		errChan:                    make(chan error, 1),
 	}
-	Log.Infof("[%s] lifecycle new rtmp ClientSession. session=%p", uk, s)
+	Log.Infof("[%s] lifecycle new rtmp ClientSession. session=%p", s.UniqueKey(), s)
 	return s
 }
 
 // Do 阻塞直到收到服务端返回的 publish / play 对应结果的信令或者发生错误
 func (s *ClientSession) Do(rawUrl string) error {
-	Log.Debugf("[%s] Do. url=%s", s.uniqueKey, rawUrl)
+	Log.Debugf("[%s] Do. url=%s", s.UniqueKey(), rawUrl)
 
 	var (
 		ctx    context.Context
@@ -221,44 +196,24 @@ func (s *ClientSession) RawQuery() string {
 }
 
 func (s *ClientSession) UniqueKey() string {
-	return s.uniqueKey
+	return s.sessionStat.UniqueKey()
 }
 
+// ----- ISessionStat --------------------------------------------------------------------------------------------------
+
 func (s *ClientSession) GetStat() base.StatSession {
-	connStat := s.conn.GetStat()
-	s.stat.ReadBytesSum = connStat.ReadBytesSum
-	s.stat.WroteBytesSum = connStat.WroteBytesSum
-	return s.stat
+	return s.sessionStat.GetStatWithConn(s.conn)
 }
 
 func (s *ClientSession) UpdateStat(intervalSec uint32) {
-	currStat := s.conn.GetStat()
-	rDiff := currStat.ReadBytesSum - s.prevConnStat.ReadBytesSum
-	s.stat.ReadBitrate = int(rDiff * 8 / 1024 / uint64(intervalSec))
-	wDiff := currStat.WroteBytesSum - s.prevConnStat.WroteBytesSum
-	s.stat.WriteBitrate = int(wDiff * 8 / 1024 / uint64(intervalSec))
-	switch s.t {
-	case CstPushSession:
-		s.stat.Bitrate = s.stat.WriteBitrate
-	case CstPullSession:
-		s.stat.Bitrate = s.stat.ReadBitrate
-	}
-	s.prevConnStat = currStat
+	s.sessionStat.UpdateStatWitchConn(s.conn, intervalSec)
 }
 
 func (s *ClientSession) IsAlive() (readAlive, writeAlive bool) {
-	currStat := s.conn.GetStat()
-	if s.staleStat == nil {
-		s.staleStat = new(connection.Stat)
-		*s.staleStat = currStat
-		return true, true
-	}
-
-	readAlive = !(currStat.ReadBytesSum-s.staleStat.ReadBytesSum == 0)
-	writeAlive = !(currStat.WroteBytesSum-s.staleStat.WroteBytesSum == 0)
-	*s.staleStat = currStat
-	return
+	return s.sessionStat.IsAliveWitchConn(s.conn)
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
 
 func (s *ClientSession) connect() {
 	if err := s.tcpConnect(); err != nil {
@@ -271,14 +226,14 @@ func (s *ClientSession) connect() {
 		return
 	}
 
-	Log.Infof("[%s] > W SetChunkSize %d.", s.uniqueKey, LocalChunkSize)
+	Log.Infof("[%s] > W SetChunkSize %d.", s.UniqueKey(), LocalChunkSize)
 	if err := s.packer.writeChunkSize(s.conn, LocalChunkSize); err != nil {
 		s.errChan <- err
 		return
 	}
 
-	Log.Infof("[%s] > W connect('%s'). tcUrl=%s", s.uniqueKey, s.appName(), s.tcUrl())
-	if err := s.packer.writeConnect(s.conn, s.appName(), s.tcUrl(), s.t == CstPushSession); err != nil {
+	Log.Infof("[%s] > W connect('%s'). tcUrl=%s", s.UniqueKey(), s.appName(), s.tcUrl())
+	if err := s.packer.writeConnect(s.conn, s.appName(), s.tcUrl(), s.sessionStat.BaseType() == base.SessionBaseTypePushStr); err != nil {
 		s.errChan <- err
 		return
 	}
@@ -325,10 +280,10 @@ func (s *ClientSession) streamNameWithRawQuery() string {
 }
 
 func (s *ClientSession) tcpConnect() error {
-	Log.Infof("[%s] > tcp connect.", s.uniqueKey)
+	Log.Infof("[%s] > tcp connect.", s.UniqueKey())
 	var err error
 
-	s.stat.RemoteAddr = s.urlCtx.HostWithPort
+	s.sessionStat.SetRemoteAddr(s.urlCtx.HostWithPort)
 
 	var conn net.Conn
 	if s.urlCtx.Scheme == "rtmps" {
@@ -354,7 +309,7 @@ func (s *ClientSession) tcpConnect() error {
 }
 
 func (s *ClientSession) handshake() error {
-	Log.Infof("[%s] > W Handshake C0+C1.", s.uniqueKey)
+	Log.Infof("[%s] > W Handshake C0+C1.", s.UniqueKey())
 	if err := s.hc.WriteC0C1(s.conn); err != nil {
 		return err
 	}
@@ -362,9 +317,9 @@ func (s *ClientSession) handshake() error {
 	if err := s.hc.ReadS0S1(s.conn); err != nil {
 		return err
 	}
-	Log.Infof("[%s] < R Handshake S0+S1.", s.uniqueKey)
+	Log.Infof("[%s] < R Handshake S0+S1.", s.UniqueKey())
 
-	Log.Infof("[%s] > W Handshake C2.", s.uniqueKey)
+	Log.Infof("[%s] > W Handshake C2.", s.UniqueKey())
 	if err := s.hc.WriteC2(s.conn); err != nil {
 		return err
 	}
@@ -372,7 +327,7 @@ func (s *ClientSession) handshake() error {
 	if err := s.hc.ReadS2(s.conn); err != nil {
 		return err
 	}
-	Log.Infof("[%s] < R Handshake S2.", s.uniqueKey)
+	Log.Infof("[%s] < R Handshake S2.", s.UniqueKey())
 	return nil
 }
 
@@ -383,11 +338,12 @@ func (s *ClientSession) runReadLoop() {
 }
 
 func (s *ClientSession) doMsg(stream *Stream) error {
-	if s.t == CstPullSession {
+	if s.sessionStat.BaseType() == base.SessionBaseTypePullStr {
 		if err := s.doRespAcknowledgement(stream); err != nil {
 			return err
 		}
 	}
+
 	switch stream.header.MsgTypeId {
 	case base.RtmpTypeIdWinAckSize:
 		fallthrough
@@ -408,7 +364,7 @@ func (s *ClientSession) doMsg(stream *Stream) error {
 	case base.RtmpTypeIdVideo:
 		s.onReadRtmpAvMsg(stream.toAvMsg())
 	default:
-		Log.Errorf("[%s] read unknown message. typeid=%d, %s", s.uniqueKey, stream.header.MsgTypeId, stream.toDebugString())
+		Log.Errorf("[%s] read unknown message. typeid=%d, %s", s.UniqueKey(), stream.header.MsgTypeId, stream.toDebugString())
 		panic(0)
 	}
 	return nil
@@ -416,7 +372,7 @@ func (s *ClientSession) doMsg(stream *Stream) error {
 
 func (s *ClientSession) doAck(stream *Stream) error {
 	seqNum := bele.BeUint32(stream.msg.buff.Bytes())
-	Log.Infof("[%s] < R Acknowledgement. ignore. sequence number=%d.", s.uniqueKey, seqNum)
+	Log.Infof("[%s] < R Acknowledgement. ignore. sequence number=%d.", s.UniqueKey(), seqNum)
 	return nil
 }
 func (s *ClientSession) doUserControl(stream *Stream) error {
@@ -430,7 +386,7 @@ func (s *ClientSession) doUserControl(stream *Stream) error {
 	s.debugLogReadUserCtrlMsgCount++
 	if s.debugLogReadUserCtrlMsgCount <= s.debugLogReadUserCtrlMsgMax {
 		Log.Warnf("[%s] read user control message, ignore. buf=%s",
-			s.uniqueKey, hex.Dump(stream.msg.buff.Peek(32)))
+			s.UniqueKey(), hex.Dump(stream.msg.buff.Peek(32)))
 	}
 	return nil
 }
@@ -443,7 +399,7 @@ func (s *ClientSession) doDataMessageAmf0(stream *Stream) error {
 
 	switch val {
 	case "|RtmpSampleAccess":
-		Log.Debugf("[%s] < R |RtmpSampleAccess, ignore.", s.uniqueKey)
+		Log.Debugf("[%s] < R |RtmpSampleAccess, ignore.", s.UniqueKey())
 		return nil
 	default:
 	}
@@ -464,7 +420,7 @@ func (s *ClientSession) doCommandMessage(stream *Stream) error {
 
 	switch cmd {
 	case "onBWDone":
-		Log.Warnf("[%s] < R onBWDone. ignore.", s.uniqueKey)
+		Log.Warnf("[%s] < R onBWDone. ignore.", s.UniqueKey())
 	case "_result":
 		return s.doResultMessage(stream, tid)
 	case "onStatus":
@@ -472,7 +428,7 @@ func (s *ClientSession) doCommandMessage(stream *Stream) error {
 	case "_error":
 		return s.doErrorMessage(stream, tid)
 	default:
-		Log.Errorf("[%s] read unknown command message. cmd=%s, %s", s.uniqueKey, cmd, stream.toDebugString())
+		Log.Errorf("[%s] read unknown command message. cmd=%s, %s", s.UniqueKey(), cmd, stream.toDebugString())
 	}
 
 	return nil
@@ -486,8 +442,7 @@ func (s *ClientSession) doErrorMessage(stream *Stream, tid int) error {
 	if err != nil {
 		return err
 	}
-	switch s.t {
-	case CstPushSession:
+	if s.sessionStat.BaseType() == base.SessionBaseTypePushStr {
 		description, err := infos.FindString("description")
 		if err != nil {
 			return err
@@ -570,22 +525,22 @@ func (s *ClientSession) doOnStatusMessage(stream *Stream, tid int) error {
 	if err != nil {
 		return err
 	}
-	switch s.t {
-	case CstPushSession:
+	switch s.sessionStat.BaseType() {
+	case base.SessionBaseTypePushStr:
 		switch code {
 		case "NetStream.Publish.Start":
-			Log.Infof("[%s] < R onStatus('NetStream.Publish.Start').", s.uniqueKey)
+			Log.Infof("[%s] < R onStatus('NetStream.Publish.Start').", s.UniqueKey())
 			s.notifyDoResultSucc()
 		default:
-			Log.Warnf("[%s] read on status message but code field unknown. code=%s", s.uniqueKey, code)
+			Log.Warnf("[%s] read on status message but code field unknown. code=%s", s.UniqueKey(), code)
 		}
-	case CstPullSession:
+	case base.SessionBaseTypePullStr:
 		switch code {
 		case "NetStream.Play.Start":
-			Log.Infof("[%s] < R onStatus('NetStream.Play.Start').", s.uniqueKey)
+			Log.Infof("[%s] < R onStatus('NetStream.Play.Start').", s.UniqueKey())
 			s.notifyDoResultSucc()
 		default:
-			Log.Warnf("[%s] read on status message but code field unknown. code=%s", s.uniqueKey, code)
+			Log.Warnf("[%s] read on status message but code field unknown. code=%s", s.UniqueKey(), code)
 		}
 	}
 
@@ -609,13 +564,13 @@ func (s *ClientSession) doResultMessage(stream *Stream, tid int) error {
 		}
 		switch code {
 		case "NetConnection.Connect.Success":
-			Log.Infof("[%s] < R _result(\"NetConnection.Connect.Success\").", s.uniqueKey)
-			Log.Infof("[%s] > W createStream().", s.uniqueKey)
+			Log.Infof("[%s] < R _result(\"NetConnection.Connect.Success\").", s.UniqueKey())
+			Log.Infof("[%s] > W createStream().", s.UniqueKey())
 			if err := s.packer.writeCreateStream(s.conn); err != nil {
 				return err
 			}
 		default:
-			Log.Errorf("[%s] unknown code. code=%v", s.uniqueKey, code)
+			Log.Errorf("[%s] unknown code. code=%v", s.UniqueKey(), code)
 		}
 	case tidClientCreateStream:
 		err := stream.msg.readNull()
@@ -626,21 +581,21 @@ func (s *ClientSession) doResultMessage(stream *Stream, tid int) error {
 		if err != nil {
 			return err
 		}
-		Log.Infof("[%s] < R _result().", s.uniqueKey)
-		switch s.t {
-		case CstPullSession:
-			Log.Infof("[%s] > W play('%s').", s.uniqueKey, s.streamNameWithRawQuery())
-			if err := s.packer.writePlay(s.conn, s.streamNameWithRawQuery(), sid); err != nil {
+		Log.Infof("[%s] < R _result().", s.UniqueKey())
+		switch s.sessionStat.BaseType() {
+		case base.SessionBaseTypePushStr:
+			Log.Infof("[%s] > W publish('%s').", s.UniqueKey(), s.streamNameWithRawQuery())
+			if err := s.packer.writePublish(s.conn, s.appName(), s.streamNameWithRawQuery(), sid); err != nil {
 				return err
 			}
-		case CstPushSession:
-			Log.Infof("[%s] > W publish('%s').", s.uniqueKey, s.streamNameWithRawQuery())
-			if err := s.packer.writePublish(s.conn, s.appName(), s.streamNameWithRawQuery(), sid); err != nil {
+		case base.SessionBaseTypePullStr:
+			Log.Infof("[%s] > W play('%s').", s.UniqueKey(), s.streamNameWithRawQuery())
+			if err := s.packer.writePlay(s.conn, s.streamNameWithRawQuery(), sid); err != nil {
 				return err
 			}
 		}
 	default:
-		Log.Errorf("[%s] unknown tid. tid=%d", s.uniqueKey, tid)
+		Log.Errorf("[%s] unknown tid. tid=%d", s.UniqueKey(), tid)
 	}
 	return nil
 }
@@ -653,15 +608,15 @@ func (s *ClientSession) doProtocolControlMessage(stream *Stream) error {
 	switch stream.header.MsgTypeId {
 	case base.RtmpTypeIdWinAckSize:
 		s.option.PeerWinAckSize = val
-		Log.Infof("[%s] < R Window Acknowledgement Size: %d", s.uniqueKey, s.option.PeerWinAckSize)
+		Log.Infof("[%s] < R Window Acknowledgement Size: %d", s.UniqueKey(), s.option.PeerWinAckSize)
 	case base.RtmpTypeIdBandwidth:
 		// TODO chef: 是否需要关注这个信令
-		Log.Warnf("[%s] < R Set Peer Bandwidth. ignore.", s.uniqueKey)
+		Log.Warnf("[%s] < R Set Peer Bandwidth. ignore.", s.UniqueKey())
 	case base.RtmpTypeIdSetChunkSize:
 		// composer内部会自动更新peer chunk size.
-		Log.Infof("[%s] < R Set Chunk Size %d.", s.uniqueKey, val)
+		Log.Infof("[%s] < R Set Chunk Size %d.", s.UniqueKey(), val)
 	default:
-		Log.Errorf("[%s] read unknown protocol control message. typeid=%d, %s", s.uniqueKey, stream.header.MsgTypeId, stream.toDebugString())
+		Log.Errorf("[%s] read unknown protocol control message. typeid=%d, %s", s.UniqueKey(), stream.header.MsgTypeId, stream.toDebugString())
 	}
 	return nil
 }
@@ -690,14 +645,14 @@ func (s *ClientSession) doRespAcknowledgement(stream *Stream) error {
 func (s *ClientSession) notifyDoResultSucc() {
 	// 碰上过对端服务器实现有问题，对于play信令回复了两次相同的结果，我们在这里忽略掉非第一次的回复
 	if s.hasNotifyDoResultSucc {
-		Log.Warnf("[%s] has notified do result succ already, ignore it", s.uniqueKey)
+		Log.Warnf("[%s] has notified do result succ already, ignore it", s.UniqueKey())
 		return
 	}
 	s.hasNotifyDoResultSucc = true
 
 	s.conn.ModWriteChanSize(s.option.WriteChanSize)
 	//pull有可能还需要小包发送，不使用缓存
-	if s.t == CstPushSession {
+	if s.sessionStat.BaseType() == base.SessionBaseTypePushStr {
 		s.conn.ModWriteBufSize(s.option.WriteBufSize)
 	}
 
@@ -711,7 +666,7 @@ func (s *ClientSession) notifyDoResultSucc() {
 func (s *ClientSession) dispose(err error) error {
 	var retErr error
 	s.disposeOnce.Do(func() {
-		Log.Infof("[%s] lifecycle dispose rtmp ClientSession. err=%+v", s.uniqueKey, err)
+		Log.Infof("[%s] lifecycle dispose rtmp ClientSession. err=%+v", s.UniqueKey(), err)
 		if s.conn == nil {
 			retErr = base.ErrSessionNotStarted
 			return

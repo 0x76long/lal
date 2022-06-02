@@ -17,11 +17,10 @@ import (
 
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/hls"
+	"github.com/q191201771/lal/pkg/rtsp"
 	"github.com/q191201771/naza/pkg/nazajson"
 	"github.com/q191201771/naza/pkg/nazalog"
 )
-
-const ConfVersion = "v0.3.1"
 
 const (
 	defaultHlsCleanupMode    = hls.CleanupModeInTheEnd
@@ -87,6 +86,7 @@ type RtspConfig struct {
 	Enable              bool   `json:"enable"`
 	Addr                string `json:"addr"`
 	OutWaitKeyFrameFlag bool   `json:"out_wait_key_frame_flag"`
+	rtsp.ServerAuthConfig
 }
 
 type RecordConfig struct {
@@ -244,9 +244,9 @@ func LoadConfAndInitLog(confFile string) *Config {
 `)
 
 	// 检查配置版本号是否匹配
-	if config.ConfVersion != ConfVersion {
+	if config.ConfVersion != base.ConfVersion {
 		Log.Warnf("config version invalid. conf version of lalserver=%s, conf version of config file=%s",
-			ConfVersion, config.ConfVersion)
+			base.ConfVersion, config.ConfVersion)
 	}
 
 	// 做个全量字段检查，缺失的字段，Go中会先设置为零值

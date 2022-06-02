@@ -18,22 +18,89 @@ package base
 //
 // other:       rtmp.ClientSession, (rtmp.ServerSession)
 //              rtsp.BaseInSession, rtsp.BaseOutSession, rtsp.ClientCommandSession, rtsp.ServerCommandSession
-//              base.HttpSubSession
+//              base.BasicHttpSubSession
 
 // ---------------------------------------------------------------------------------------------------------------------
 
-const (
-	// ProtocolRtmp StatSession.Protocol
-	ProtocolRtmp    = "RTMP"
-	ProtocolRtsp    = "RTSP"
-	ProtocolHttpflv = "FLV"
-	ProtocolHttpts  = "TS"
-
-	SessionBaseTypePub  = "PUB"
-	SessionBaseTypeSub  = "SUB"
-	SessionBaseTypePush = "PUSH"
-	SessionBaseTypePull = "PULL"
+type (
+	SessionType int
 )
+
+const (
+	SessionTypeCustomizePub      SessionType = SessionProtocolCustomize<<8 | SessionBaseTypePub
+	SessionTypeRtmpServerSession SessionType = SessionProtocolRtmp<<8 | SessionBaseTypePubSub
+	SessionTypeRtmpPush          SessionType = SessionProtocolRtmp<<8 | SessionBaseTypePush
+	SessionTypeRtmpPull          SessionType = SessionProtocolRtmp<<8 | SessionBaseTypePull
+	SessionTypeRtspPub           SessionType = SessionProtocolRtsp<<8 | SessionBaseTypePub
+	SessionTypeRtspSub           SessionType = SessionProtocolRtsp<<8 | SessionBaseTypeSub
+	SessionTypeRtspPush          SessionType = SessionProtocolRtsp<<8 | SessionBaseTypePush
+	SessionTypeRtspPull          SessionType = SessionProtocolRtsp<<8 | SessionBaseTypePull
+	SessionTypeFlvSub            SessionType = SessionProtocolFlv<<8 | SessionBaseTypeSub
+	SessionTypeFlvPull           SessionType = SessionProtocolFlv<<8 | SessionBaseTypePull
+	SessionTypeTsSub             SessionType = SessionProtocolTs<<8 | SessionBaseTypeSub
+
+	SessionProtocolCustomize = 1
+	SessionProtocolRtmp      = 2
+	SessionProtocolRtsp      = 3
+	SessionProtocolFlv       = 4
+	SessionProtocolTs        = 5
+
+	SessionBaseTypePubSub = 1
+	SessionBaseTypePub    = 2
+	SessionBaseTypeSub    = 3
+	SessionBaseTypePush   = 4
+	SessionBaseTypePull   = 5
+
+	SessionProtocolCustomizeStr = "CUSTOMIZE"
+	SessionProtocolRtmpStr      = "RTMP"
+	SessionProtocolRtspStr      = "RTSP"
+	SessionProtocolFlvStr       = "FLV"
+	SessionProtocolTsStr        = "TS"
+
+	SessionBaseTypePubSubStr = "PUBSUB"
+	SessionBaseTypePubStr    = "PUB"
+	SessionBaseTypeSubStr    = "SUB"
+	SessionBaseTypePushStr   = "PUSH"
+	SessionBaseTypePullStr   = "PULL"
+)
+
+//func (protocol SessionProtocol) Stringify() string {
+//	switch protocol {
+//	case SessionProtocolCustomize:
+//		return SessionProtocolCustomizeStr
+//	case SessionProtocolRtmp:
+//		return SessionProtocolRtmpStr
+//	case SessionProtocolRtsp:
+//		return SessionProtocolRtspStr
+//	case SessionProtocolFlv:
+//		return SessionProtocolFlvStr
+//	case SessionProtocolTs:
+//		return SessionProtocolTsStr
+//	}
+//	return "INVALID"
+//}
+//
+//func (typ SessionBaseType) Stringify() string {
+//	switch typ {
+//	case SessionBaseTypePubSub:
+//		return SessionBaseTypePubSubStr
+//	case SessionBaseTypePub:
+//		return SessionBaseTypePubStr
+//	case SessionBaseTypeSub:
+//		return SessionBaseTypeSubStr
+//	case SessionBaseTypePush:
+//		return SessionBaseTypePushStr
+//	case SessionBaseTypePull:
+//		return SessionBaseTypePullStr
+//	}
+//	return "INVALID"
+//}
+
+type ISession interface {
+	ISessionUrlContext
+	IObject
+	ISessionStat
+}
 
 type IClientSession interface {
 	// PushSession:
@@ -44,16 +111,12 @@ type IClientSession interface {
 	// Pull()
 
 	IClientSessionLifecycle
-	ISessionUrlContext
-	IObject
-	ISessionStat
+	ISession
 }
 
 type IServerSession interface {
 	IServerSessionLifecycle
-	ISessionUrlContext
-	IObject
-	ISessionStat
+	ISession
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -144,7 +207,7 @@ type ISessionUrlContext interface {
 	Url() string
 	AppName() string
 	StreamName() string
-	RawQuery() string
+	RawQuery() string // 参数，也即 url param
 }
 
 type IObject interface {
@@ -154,6 +217,13 @@ type IObject interface {
 	//
 	UniqueKey() string
 }
+
+//type ISessionType interface {
+//	Protocol() string
+//	BaseType() string
+//
+//	//UniqueKey() string
+//}
 
 // TODO chef: rtmp.ClientSession修改为BaseClientSession更好些
 

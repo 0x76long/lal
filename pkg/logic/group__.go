@@ -192,9 +192,9 @@ func (group *Group) GetStat(maxsub int) base.StatGroup {
 	defer group.mutex.Unlock()
 
 	if group.rtmpPubSession != nil {
-		group.stat.StatPub = base.StatSession2Pub(group.rtmpPubSession.GetStat())
+		group.stat.StatPub = base.Session2StatPub(group.rtmpPubSession)
 	} else if group.rtspPubSession != nil {
-		group.stat.StatPub = base.StatSession2Pub(group.rtspPubSession.GetStat())
+		group.stat.StatPub = base.Session2StatPub(group.rtspPubSession)
 	} else {
 		group.stat.StatPub = base.StatPub{}
 	}
@@ -208,28 +208,28 @@ func (group *Group) GetStat(maxsub int) base.StatGroup {
 		if statSubCount > maxsub {
 			break
 		}
-		group.stat.StatSubs = append(group.stat.StatSubs, base.StatSession2Sub(s.GetStat()))
+		group.stat.StatSubs = append(group.stat.StatSubs, base.Session2StatSub(s))
 	}
 	for s := range group.httpflvSubSessionSet {
 		statSubCount++
 		if statSubCount > maxsub {
 			break
 		}
-		group.stat.StatSubs = append(group.stat.StatSubs, base.StatSession2Sub(s.GetStat()))
+		group.stat.StatSubs = append(group.stat.StatSubs, base.Session2StatSub(s))
 	}
 	for s := range group.httptsSubSessionSet {
 		statSubCount++
 		if statSubCount > maxsub {
 			break
 		}
-		group.stat.StatSubs = append(group.stat.StatSubs, base.StatSession2Sub(s.GetStat()))
+		group.stat.StatSubs = append(group.stat.StatSubs, base.Session2StatSub(s))
 	}
 	for s := range group.rtspSubSessionSet {
 		statSubCount++
 		if statSubCount > maxsub {
 			break
 		}
-		group.stat.StatSubs = append(group.stat.StatSubs, base.StatSession2Sub(s.GetStat()))
+		group.stat.StatSubs = append(group.stat.StatSubs, base.Session2StatSub(s))
 	}
 
 	return group.stat
@@ -314,7 +314,8 @@ func (group *Group) OutSessionNum() int {
 
 	pushNum := 0
 	for _, item := range group.url2PushProxy {
-		if item.isPushing || item.pushSession != nil {
+		// TODO(chef): [refactor] 考虑只判断session是否为nil 202205
+		if item.isPushing && item.pushSession != nil {
 			pushNum++
 		}
 	}
@@ -369,7 +370,7 @@ func (group *Group) disposeInactiveSessions() {
 	}
 	for _, item := range group.url2PushProxy {
 		session := item.pushSession
-		if item.isPushing || session != nil {
+		if item.isPushing && session != nil {
 			if _, writeAlive := session.IsAlive(); !writeAlive {
 				Log.Warnf("[%s] session timeout. session=%s", group.UniqueKey, session.UniqueKey())
 				session.Dispose()
@@ -404,7 +405,7 @@ func (group *Group) updateAllSessionStat() {
 	}
 	for _, item := range group.url2PushProxy {
 		session := item.pushSession
-		if item.isPushing || session != nil {
+		if item.isPushing && session != nil {
 			session.UpdateStat(calcSessionStatIntervalSec)
 		}
 	}
@@ -423,7 +424,7 @@ func (group *Group) hasSubSession() bool {
 
 func (group *Group) hasPushSession() bool {
 	for _, item := range group.url2PushProxy {
-		if item.isPushing || item.pushSession != nil {
+		if item.isPushing && item.pushSession != nil {
 			return true
 		}
 	}

@@ -44,7 +44,7 @@ func NewPushSession(modOptions ...ModPushSessionOption) *PushSession {
 	}
 	return &PushSession{
 		IsFresh: true,
-		core: NewClientSession(CstPushSession, func(option *ClientSessionOption) {
+		core: NewClientSession(base.SessionTypeRtmpPush, func(option *ClientSessionOption) {
 			option.DoTimeoutMs = opt.PushTimeoutMs
 			option.WriteAvTimeoutMs = opt.WriteAvTimeoutMs
 			option.WriteBufSize = opt.WriteBufSize
@@ -111,8 +111,10 @@ func (s *PushSession) RawQuery() string {
 
 // UniqueKey 文档请参考： interface IObject
 func (s *PushSession) UniqueKey() string {
-	return s.core.uniqueKey
+	return s.core.UniqueKey()
 }
+
+// ----- ISessionStat --------------------------------------------------------------------------------------------------
 
 // GetStat 文档请参考： interface ISessionStat
 func (s *PushSession) GetStat() base.StatSession {
