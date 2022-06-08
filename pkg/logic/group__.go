@@ -26,7 +26,7 @@ import (
 
 type IGroupObserver interface {
 	CleanupHlsIfNeeded(appName string, streamName string, path string)
-
+	OnHlsMakeTs(info base.HlsMakeTsInfo)
 	OnRelayPullStart(info base.PullStartInfo) // TODO(chef): refactor me
 	OnRelayPullStop(info base.PullStopInfo)
 }
@@ -465,4 +465,8 @@ func (group *Group) shouldStartMpegtsRemuxer() bool {
 	return (group.config.HlsConfig.Enable || group.config.HlsConfig.EnableHttps) ||
 		(group.config.HttptsConfig.Enable || group.config.HttptsConfig.EnableHttps) ||
 		group.config.RecordConfig.EnableMpegts
+}
+
+func (group *Group) OnHlsMakeTs(info base.HlsMakeTsInfo) {
+	group.observer.OnHlsMakeTs(info)
 }
