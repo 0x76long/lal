@@ -77,17 +77,20 @@ type ClientSessionOption struct {
 	HandshakeComplexFlag bool // 握手是否使用复杂模式
 
 	PeerWinAckSize int
+
+	ReuseReadMessageBufferFlag bool // 接收Message时，是否重用内存块
 }
 
 var defaultClientSessOption = ClientSessionOption{
-	DoTimeoutMs:          10000,
-	ReadAvTimeoutMs:      0,
-	WriteAvTimeoutMs:     0,
-	ReadBufSize:          0,
-	WriteBufSize:         0,
-	WriteChanSize:        0,
-	HandshakeComplexFlag: false,
-	PeerWinAckSize:       0,
+	DoTimeoutMs:                10000,
+	ReadAvTimeoutMs:            0,
+	WriteAvTimeoutMs:           0,
+	ReadBufSize:                0,
+	WriteBufSize:               0,
+	WriteChanSize:              0,
+	HandshakeComplexFlag:       false,
+	PeerWinAckSize:             0,
+	ReuseReadMessageBufferFlag: true,
 }
 
 type ModClientSessionOption func(option *ClientSessionOption)
@@ -106,13 +109,16 @@ func NewClientSession(sessionType base.SessionType, modOptions ...ModClientSessi
 		hc = &HandshakeClientSimple{}
 	}
 
+	cc := NewChunkComposer()
+	cc.SetReuseBufferFlag(option.ReuseReadMessageBufferFlag)
+
 	s := &ClientSession{
 		onDoResult:                 defaultOnPullResult,
 		onReadRtmpAvMsg:            defaultOnReadRtmpAvMsg,
 		option:                     option,
 		doResultChan:               make(chan struct{}, 1),
 		packer:                     NewMessagePacker(),
-		chunkComposer:              NewChunkComposer(),
+		chunkComposer:              cc,
 		sessionStat:                base.NewBasicSessionStat(sessionType, ""),
 		debugLogReadUserCtrlMsgMax: 5,
 		hc:                         hc,
