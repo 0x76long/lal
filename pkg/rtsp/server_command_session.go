@@ -33,9 +33,15 @@ type IServerCommandSessionObserver interface {
 
 	// OnNewRtspSubSessionDescribe
 	//
-	// @brief Describe阶段回调
-	// @return ok  如果返回false，则表示上层要强制关闭这个拉流请求
-	// @return sdp
+	// Describe阶段回调
+	//
+	// 上层的几种逻辑对应的返回值的组合情况：
+	//
+	// 1. 强制关闭这个session：`ok`设置为false
+	// 2. （当前有sdp）在回调中设置sdp，让session按正常逻辑往下走：`ok`设置为true，`sdp`设置为对应的值
+	// 3. （当前没有sdp）后续在回调外通过 ServerCommandSession.FeedSdp 可以让session按正常逻辑往下走：`ok`设置为true，`sdp`设置为nil
+	//
+	// TODO(chef): bool参数类型统一为error类型 202206
 	//
 	OnNewRtspSubSessionDescribe(session *SubSession) (ok bool, sdp []byte)
 
@@ -59,6 +65,8 @@ type ServerCommandSession struct {
 
 	pubSession *PubSession
 	subSession *SubSession
+
+	describeSeq string // only for sub session
 }
 
 func NewServerCommandSession(observer IServerCommandSessionObserver, conn net.Conn, authConf ServerAuthConfig) *ServerCommandSession {
@@ -87,7 +95,7 @@ func (session *ServerCommandSession) Dispose() error {
 }
 
 func (session *ServerCommandSession) FeedSdp(b []byte) {
-
+	session.feedSdp(b)
 }
 
 // WriteInterleavedPacket
@@ -110,9 +118,9 @@ func (session *ServerCommandSession) UpdateStat(intervalSec uint32) {
 
 	currStat := session.conn.GetStat()
 	rDiff := currStat.ReadBytesSum - session.prevConnStat.ReadBytesSum
-	session.stat.Bitrate = int(rDiff * 8 / 1024 / uint64(intervalSec))
+	session.stat.BitrateKbits = int(rDiff * 8 / 1024 / uint64(intervalSec))
 	wDiff := currStat.WroteBytesSum - session.prevConnStat.WroteBytesSum
-	session.stat.Bitrate = int(wDiff * 8 / 1024 / uint64(intervalSec))
+	session.stat.BitrateKbits = int(wDiff * 8 / 1024 / uint64(intervalSec))
 	session.prevConnStat = currStat
 }
 
@@ -273,6 +281,8 @@ func (session *ServerCommandSession) handleDescribe(requestCtx nazahttp.HttpReqM
 		return err
 	}
 
+	session.describeSeq = requestCtx.Headers.Get(HeaderCSeq)
+
 	session.subSession = NewSubSession(urlCtx, session)
 	Log.Infof("[%s] link new SubSession. [%s]", session.uniqueKey, session.subSession.UniqueKey())
 	ok, rawSdp := session.observer.OnNewRtspSubSessionDescribe(session.subSession)
@@ -281,11 +291,18 @@ func (session *ServerCommandSession) handleDescribe(requestCtx nazahttp.HttpReqM
 		return base.ErrRtspClosedByObserver
 	}
 
+	if rawSdp != nil {
+		return session.feedSdp(rawSdp)
+	}
+	return nil
+}
+
+func (session *ServerCommandSession) feedSdp(rawSdp []byte) error {
 	sdpCtx, _ := sdp.ParseSdp2LogicContext(rawSdp)
 	session.subSession.InitWithSdp(sdpCtx)
 
-	resp := PackResponseDescribe(requestCtx.Headers.Get(HeaderCSeq), string(rawSdp))
-	_, err = session.conn.Write([]byte(resp))
+	resp := PackResponseDescribe(session.describeSeq, string(rawSdp))
+	_, err := session.conn.Write([]byte(resp))
 	return err
 }
 
@@ -403,6 +420,13 @@ func (session *ServerCommandSession) handleRecord(requestCtx nazahttp.HttpReqMsg
 
 func (session *ServerCommandSession) handlePlay(requestCtx nazahttp.HttpReqMsgCtx) error {
 	Log.Infof("[%s] < R PLAY", session.uniqueKey)
+
+	// 没有收到前面的信令，直接收到Play信令
+	if session.subSession == nil {
+		Log.Errorf("[%s] handlePlay but subSession not exist.", session.uniqueKey)
+		return base.ErrRtsp
+	}
+
 	// TODO(chef): [opt] 上层关闭，可以考虑回复非200状态码再关闭
 	if err := session.observer.OnNewRtspSubSessionPlay(session.subSession); err != nil {
 		return err

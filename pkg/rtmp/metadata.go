@@ -10,6 +10,8 @@ package rtmp
 
 import (
 	"bytes"
+	"github.com/q191201771/naza/pkg/nazabytes"
+	"github.com/q191201771/naza/pkg/nazalog"
 
 	"github.com/q191201771/lal/pkg/base"
 )
@@ -30,6 +32,58 @@ func ParseMetadata(b []byte) (ObjectPairArray, error) {
 	}
 	opa, _, err := Amf0.ReadObjectOrArray(b[pos:])
 	return opa, err
+}
+
+// TODO(chef): [test] MetadataEnsureWithSetDataFrame 这两个函数增加单元测试 202207
+
+// MetadataEnsureWithSdf
+//
+// 确保metadata中包含@setDataFrame
+//
+// @return 返回的内存块为内部独立申请
+//
+func MetadataEnsureWithSdf(b []byte) ([]byte, error) {
+	var ret []byte
+	v, _, err := Amf0.ReadString(b)
+	if err != nil {
+		nazalog.Errorf("%+v", err)
+		return append(ret, b...), err
+	}
+
+	// 已经有了
+	if v == "@setDataFrame" {
+		return append(ret, b...), nil
+	}
+
+	buf := nazabytes.NewBuffer(16 + len(b)) // 16=1+2+13 @setDataFrame
+	if err = Amf0.WriteString(buf, "@setDataFrame"); err != nil {
+		nazalog.Errorf("%+v", err)
+		return append(ret, b...), err
+	}
+	_, err = buf.Write(b)
+	return buf.Bytes(), err
+}
+
+// MetadataEnsureWithoutSdf
+//
+// 确保metadata中不包含@setDataFrame
+//
+// @return 返回的内存块为内部独立申请
+//
+func MetadataEnsureWithoutSdf(b []byte) ([]byte, error) {
+	var ret []byte
+	v, l, err := Amf0.ReadString(b)
+	if err != nil {
+		nazalog.Errorf("%+v", err)
+		return append(ret, b...), err
+	}
+
+	// 本来就不包含
+	if v != "@setDataFrame" {
+		return append(ret, b...), nil
+	}
+
+	return append(ret, b[l:]...), nil
 }
 
 // BuildMetadata spec-video_file_format_spec_v10.pdf

@@ -9,9 +9,10 @@
 package gb28181
 
 import (
-	"bytes"
 	"encoding/hex"
-	"fmt"
+	"github.com/q191201771/lal/pkg/base"
+	"github.com/q191201771/lal/pkg/hevc"
+	"github.com/q191201771/naza/pkg/nazamd5"
 	"io/ioutil"
 	"os"
 	"testing"
@@ -66,15 +67,13 @@ var goldenRtpList = []string{
 }
 
 func TestPsUnpacker(t *testing.T) {
-	unpacker := NewPsUnpacker().WithCallbackFunc(nil, func(payload []byte, dts int64, pts int64) {
-
-	})
+	unpacker := NewPsUnpacker()
 
 	for i, item := range goldenRtpList {
 		nazalog.Debugf("%d", i)
 		b, _ := hex.DecodeString(item)
 		nazalog.Debugf("%s", hex.Dump(nazabytes.Prefix(b, 128)))
-		unpacker.FeedRtpPacket(b, 0)
+		unpacker.FeedRtpPacket(b)
 	}
 }
 
@@ -113,62 +112,48 @@ var hevcNalu = []byte{
 
 func TestPsUnpacker2(t *testing.T) {
 	// 解析别人提供的一些测试数据，开发阶段用
-
 	//test1()
-	//test2()
 }
 
 func test1() {
+	nazalog.Debugf("[test1] > test1")
 	// 读取raw文件(包连在一起，不包含rtp header)，存取h264文件
 
-	b, err := ioutil.ReadFile("/tmp/udp.raw")
+	//b, err := ioutil.ReadFile("/tmp/udp.raw")
+	b, err := ioutil.ReadFile("/Volumes/T7/new/avfile/ka_at_13sec.ps")
 	nazalog.Assert(nil, err)
 
 	fp, err := os.Create("/tmp/udp.h264")
 	nazalog.Assert(nil, err)
-	defer fp.Close()
 
 	waitingSps := true
-	unpacker := NewPsUnpacker().WithCallbackFunc(nil, func(payload []byte, dts int64, pts int64) {
-		nazalog.Debugf("onVideo. length=%d", len(payload))
-		if waitingSps {
-			if avc.ParseNaluType(payload[4]) == avc.NaluTypeSps {
-				waitingSps = false
-			} else {
-				return
-			}
-		}
-		_, _ = fp.Write(payload)
-	})
-	unpacker.FeedRtpBody(b, 0)
-}
-
-func test2() {
-	// 一个udp包一个文件，按行分隔，hex stream格式如下
-	// 8060 0000 0000 0000 0beb c567 0000 01ba
-	// 46ab 1ea9 4401 0139 9ffe ffff 0094 ab0d
-
-	fp, err := os.Create("/tmp/udp2.h264")
-	nazalog.Assert(nil, err)
-	defer fp.Close()
-
-	unpacker := NewPsUnpacker().WithCallbackFunc(nil, func(payload []byte, dts int64, pts int64) {
-		nazalog.Debugf("onVideo. length=%d", len(payload))
-		_, _ = fp.Write(payload)
-	})
-
-	for i := 1; ; i++ {
-		filename := fmt.Sprintf("/tmp/rtp-ps-video/%d.ps", i)
-		b, err := ioutil.ReadFile(filename)
-		if err != nil {
+	unpacker := NewPsUnpacker().WithOnAvPacket(func(packet *base.AvPacket) {
+		if !packet.IsVideo() {
 			return
 		}
 
-		// to be continued.
-		// 这样解析是错误的，如果内部二进制有0a就过滤掉了，应该转成string再做\n去除操作
-		b = bytes.Join(bytes.Split(b, []byte{'\n'}), nil)
-		b = bytes.Join(bytes.Split(b, []byte{' '}), nil)
-		nazalog.Debugf("%s", hex.Dump(b))
-		unpacker.FeedRtpPacket(b, 0)
-	}
+		nazalog.Debugf("[test1] onVideo. %s, %s", hevc.ParseNaluTypeReadable(packet.Payload[4]), packet.DebugString())
+		if waitingSps {
+			if packet.PayloadType == base.AvPacketPtAvc {
+				if avc.ParseNaluType(packet.Payload[4]) == avc.NaluTypeSps {
+					waitingSps = false
+				} else {
+					return
+				}
+			} else if packet.PayloadType == base.AvPacketPtHevc {
+				if hevc.ParseNaluType(packet.Payload[4]) == hevc.NaluTypeSps {
+					waitingSps = false
+				} else {
+					return
+				}
+			}
+		}
+		_, _ = fp.Write(packet.Payload)
+	})
+	unpacker.FeedRtpBody(b, 0)
+
+	fp.Close()
+	out, err := ioutil.ReadFile("/tmp/udp.h264")
+	nazalog.Assert(nil, err)
+	nazalog.Assert("fd8dbe365152e212bf8cbabb7a99c1aa", nazamd5.Md5(out))
 }

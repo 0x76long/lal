@@ -10,6 +10,7 @@ package logic
 
 import (
 	"encoding/json"
+	"github.com/q191201771/lal/pkg/gb28181"
 	"strings"
 	"sync"
 
@@ -23,6 +24,43 @@ import (
 	"github.com/q191201771/lal/pkg/rtsp"
 	"github.com/q191201771/lal/pkg/sdp"
 )
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 输入流需要做的事情
+// TODO(chef): [refactor] 考虑抽象出通用接口 202208
+//
+// checklist表格
+// | .                                           | rtmp pub | ps pub |
+// | 添加到group中                                | Y        | Y      |
+// | 到输出流的转换路径关系                         | Y        | Y      |
+// | 删除                                        | Y        | Y      |
+// | group.hasPubSession()                       | Y        | Y      |
+// | group.disposeInactiveSessions()检查超时并清理 | Y        | Y      |
+// | group.Dispose()时销毁                        | Y        | Y      |
+// | group.GetStat()时获取信息                     | Y        | Y      |
+// | group.KickSession()时踢出                    | Y        | Y      |
+// | group.updateAllSessionStat()更新信息         | Y        | Y      |
+// | group.inSessionUniqueKey()                  | Y        | Y      |
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 输入流到输出流的转换路径关系
+//
+// customizePubSession.WithOnRtmpMsg -> [dummyAudioFilter] -> OnReadRtmpAvMsg -> rtmp2RtspRemuxer -> rtsp
+//                                                                            -> rtmp
+//                                                                            -> http-flv, ts, hls
+//
+// ---------------------------------------------------------------------------------------------------------------------
+// rtmpPubSession 和customizePubSession一样，省略
+//
+// ---------------------------------------------------------------------------------------------------------------------
+// rtspPubSession -> OnRtpPacket -> rtsp
+//                -> OnAvPacket -> rtsp2RtmpRemuxer -> onRtmpMsgFromRemux -> broadcastByRtmpMsg -> rtmp
+//                                                                                              -> http-flv, ts, hls
+//
+// ---------------------------------------------------------------------------------------------------------------------
+// psPubSession -> OnAvPacketFromPsPubSession -> rtsp2RtmpRemuxer -> onRtmpMsgFromRemux -> broadcastByRtmpMsg -> rtmp2RtspRemuxer -> rtsp
+//                                                                                                            -> rtmp
+//                                                                                                            -> http-flv, ts, hls
 
 type IGroupObserver interface {
 	CleanupHlsIfNeeded(appName string, streamName string, path string)
@@ -45,28 +83,34 @@ type Group struct {
 	rtmpPubSession      *rtmp.ServerSession
 	rtspPubSession      *rtsp.PubSession
 	customizePubSession *CustomizePubSessionContext
-	rtsp2RtmpRemuxer    *remux.AvPacket2RtmpRemuxer
+	psPubSession        *gb28181.PubSession
+	rtsp2RtmpRemuxer    *remux.AvPacket2RtmpRemuxer // TODO(chef): [refactor] 重命名为avPacket2RtmpRemuxer，因为除了rtsp，customize pub和gb28181 pub都是 202208
 	rtmp2RtspRemuxer    *remux.Rtmp2RtspRemuxer
 	rtmp2MpegtsRemuxer  *remux.Rtmp2MpegtsRemuxer
 	// pull
 	pullProxy *pullProxy
 	// rtmp pub使用
 	dummyAudioFilter *remux.DummyAudioFilter
+	// ps pub使用
+	psPubTimeoutSec            uint32 // 超时时间
+	psPubPrevInactiveCheckTick int64  // 上次检查时间
+	psPubDumpFile              *base.DumpFile
 	// rtmp sub使用
 	rtmpGopCache *remux.GopCache
 	// httpflv sub使用
 	httpflvGopCache *remux.GopCache
-	// httpts使用
+	// httpts sub使用
 	httptsGopCache *remux.GopCacheMpegts
 	// rtsp使用
 	sdpCtx *sdp.LogicContext
 	// mpegts使用
 	patpmt []byte
 	// sub
-	rtmpSubSessionSet    map[*rtmp.ServerSession]struct{}
-	httpflvSubSessionSet map[*httpflv.SubSession]struct{}
-	httptsSubSessionSet  map[*httpts.SubSession]struct{}
-	rtspSubSessionSet    map[*rtsp.SubSession]struct{}
+	rtmpSubSessionSet     map[*rtmp.ServerSession]struct{}
+	httpflvSubSessionSet  map[*httpflv.SubSession]struct{}
+	httptsSubSessionSet   map[*httpts.SubSession]struct{}
+	rtspSubSessionSet     map[*rtsp.SubSession]struct{}
+	waitRtspSubSessionSet map[*rtsp.SubSession]struct{}
 	// push
 	pushEnable    bool
 	url2PushProxy map[string]*pushProxy
@@ -92,15 +136,18 @@ func NewGroup(appName string, streamName string, config *Config, observer IGroup
 		observer:   observer,
 		stat: base.StatGroup{
 			StreamName: streamName,
+			AppName: appName,
 		},
-		exitChan:             make(chan struct{}, 1),
-		rtmpSubSessionSet:    make(map[*rtmp.ServerSession]struct{}),
-		httpflvSubSessionSet: make(map[*httpflv.SubSession]struct{}),
-		httptsSubSessionSet:  make(map[*httpts.SubSession]struct{}),
-		rtspSubSessionSet:    make(map[*rtsp.SubSession]struct{}),
-		rtmpGopCache:         remux.NewGopCache("rtmp", uk, config.RtmpConfig.GopNum),
-		httpflvGopCache:      remux.NewGopCache("httpflv", uk, config.HttpflvConfig.GopNum),
-		httptsGopCache:       remux.NewGopCacheMpegts(uk, config.HttptsConfig.GopNum),
+		exitChan:                   make(chan struct{}, 1),
+		rtmpSubSessionSet:          make(map[*rtmp.ServerSession]struct{}),
+		httpflvSubSessionSet:       make(map[*httpflv.SubSession]struct{}),
+		httptsSubSessionSet:        make(map[*httpts.SubSession]struct{}),
+		rtspSubSessionSet:          make(map[*rtsp.SubSession]struct{}),
+		waitRtspSubSessionSet:      make(map[*rtsp.SubSession]struct{}),
+		rtmpGopCache:               remux.NewGopCache("rtmp", uk, config.RtmpConfig.GopNum),
+		httpflvGopCache:            remux.NewGopCache("httpflv", uk, config.HttpflvConfig.GopNum),
+		httptsGopCache:             remux.NewGopCacheMpegts(uk, config.HttptsConfig.GopNum),
+		psPubPrevInactiveCheckTick: -1,
 	}
 
 	g.initRelayPushByConfig()
@@ -130,9 +177,7 @@ func (group *Group) Tick(tickCount uint32) {
 	group.startPushIfNeeded()
 
 	// 定时关闭没有数据的session
-	if tickCount%checkSessionAliveIntervalSec == 0 {
-		group.disposeInactiveSessions()
-	}
+	group.disposeInactiveSessions(tickCount)
 
 	// 定时计算session bitrate
 	if tickCount%calcSessionStatIntervalSec == 0 {
@@ -154,6 +199,9 @@ func (group *Group) Dispose() {
 	if group.rtspPubSession != nil {
 		group.rtspPubSession.Dispose()
 	}
+	if group.psPubSession != nil {
+		group.psPubSession.Dispose()
+	}
 
 	for session := range group.rtmpSubSessionSet {
 		session.Dispose()
@@ -164,6 +212,10 @@ func (group *Group) Dispose() {
 		session.Dispose()
 	}
 	group.rtspSubSessionSet = nil
+	for session := range group.waitRtspSubSessionSet {
+		session.Dispose()
+	}
+	group.waitRtspSubSessionSet = nil
 
 	for session := range group.httpflvSubSessionSet {
 		session.Dispose()
@@ -195,6 +247,8 @@ func (group *Group) GetStat(maxsub int) base.StatGroup {
 		group.stat.StatPub = base.Session2StatPub(group.rtmpPubSession)
 	} else if group.rtspPubSession != nil {
 		group.stat.StatPub = base.Session2StatPub(group.rtspPubSession)
+	} else if group.psPubSession != nil {
+		group.stat.StatPub = base.Session2StatPub(group.psPubSession)
 	} else {
 		group.stat.StatPub = base.StatPub{}
 	}
@@ -231,6 +285,13 @@ func (group *Group) GetStat(maxsub int) base.StatGroup {
 		}
 		group.stat.StatSubs = append(group.stat.StatSubs, base.Session2StatSub(s))
 	}
+	for s := range group.waitRtspSubSessionSet {
+		statSubCount++
+		if statSubCount > maxsub {
+			break
+		}
+		group.stat.StatSubs = append(group.stat.StatSubs, base.Session2StatSub(s))
+	}
 
 	return group.stat
 }
@@ -259,6 +320,11 @@ func (group *Group) KickSession(sessionId string) bool {
 			group.rtspPubSession.Dispose()
 			return true
 		}
+	} else if strings.HasPrefix(sessionId, base.UkPrePsPubSession) {
+		if group.psPubSession != nil && group.psPubSession.UniqueKey() == sessionId {
+			group.psPubSession.Dispose()
+			return true
+		}
 	} else if strings.HasPrefix(sessionId, base.UkPreFlvSubSession) {
 		// TODO chef: 考虑数据结构改成sessionIdzuokey的map
 		for s := range group.httpflvSubSessionSet {
@@ -276,6 +342,12 @@ func (group *Group) KickSession(sessionId string) bool {
 		}
 	} else if strings.HasPrefix(sessionId, base.UkPreRtspSubSession) {
 		for s := range group.rtspSubSessionSet {
+			if s.UniqueKey() == sessionId {
+				s.Dispose()
+				return true
+			}
+		}
+		for s := range group.waitRtspSubSessionSet {
 			if s.UniqueKey() == sessionId {
 				s.Dispose()
 				return true
@@ -319,7 +391,8 @@ func (group *Group) OutSessionNum() int {
 			pushNum++
 		}
 	}
-	return len(group.rtmpSubSessionSet) + len(group.rtspSubSessionSet) + len(group.httpflvSubSessionSet) + len(group.httptsSubSessionSet) + pushNum
+	return len(group.rtmpSubSessionSet) + len(group.rtspSubSessionSet) + len(group.waitRtspSubSessionSet) +
+		len(group.httpflvSubSessionSet) + len(group.httptsSubSessionSet) + pushNum
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -328,7 +401,31 @@ func (group *Group) OutSessionNum() int {
 //
 // TODO chef: [refactor] 梳理和naza.Connection超时重复部分
 //
-func (group *Group) disposeInactiveSessions() {
+func (group *Group) disposeInactiveSessions(tickCount uint32) {
+	if group.psPubSession != nil {
+		if group.psPubTimeoutSec == 0 {
+			// noop
+			// 没有超时逻辑
+		} else {
+			if group.psPubPrevInactiveCheckTick == -1 ||
+				tickCount-uint32(group.psPubPrevInactiveCheckTick) >= group.psPubTimeoutSec {
+
+				if readAlive, _ := group.psPubSession.IsAlive(); !readAlive {
+					Log.Warnf("[%s] session timeout. session=%s", group.UniqueKey, group.psPubSession.UniqueKey())
+					group.psPubSession.Dispose()
+				}
+
+				group.psPubPrevInactiveCheckTick = int64(tickCount)
+			}
+		}
+	}
+
+	// 以下都是以 checkSessionAliveIntervalSec 为间隔的清理逻辑
+
+	if tickCount%checkSessionAliveIntervalSec != 0 {
+		return
+	}
+
 	if group.rtmpPubSession != nil {
 		if readAlive, _ := group.rtmpPubSession.IsAlive(); !readAlive {
 			Log.Warnf("[%s] session timeout. session=%s", group.UniqueKey, group.rtmpPubSession.UniqueKey())
@@ -351,6 +448,12 @@ func (group *Group) disposeInactiveSessions() {
 		}
 	}
 	for session := range group.rtspSubSessionSet {
+		if _, writeAlive := session.IsAlive(); !writeAlive {
+			Log.Warnf("[%s] session timeout. session=%s", group.UniqueKey, session.UniqueKey())
+			session.Dispose()
+		}
+	}
+	for session := range group.waitRtspSubSessionSet {
 		if _, writeAlive := session.IsAlive(); !writeAlive {
 			Log.Warnf("[%s] session timeout. session=%s", group.UniqueKey, session.UniqueKey())
 			session.Dispose()
@@ -388,6 +491,9 @@ func (group *Group) updateAllSessionStat() {
 	if group.rtspPubSession != nil {
 		group.rtspPubSession.UpdateStat(calcSessionStatIntervalSec)
 	}
+	if group.psPubSession != nil {
+		group.psPubSession.UpdateStat(calcSessionStatIntervalSec)
+	}
 
 	group.updatePullSessionStat()
 
@@ -403,6 +509,9 @@ func (group *Group) updateAllSessionStat() {
 	for session := range group.rtspSubSessionSet {
 		session.UpdateStat(calcSessionStatIntervalSec)
 	}
+	for session := range group.waitRtspSubSessionSet {
+		session.UpdateStat(calcSessionStatIntervalSec)
+	}
 	for _, item := range group.url2PushProxy {
 		session := item.pushSession
 		if item.isPushing && session != nil {
@@ -412,14 +521,16 @@ func (group *Group) updateAllSessionStat() {
 }
 
 func (group *Group) hasPubSession() bool {
-	return group.rtmpPubSession != nil || group.rtspPubSession != nil || group.customizePubSession != nil
+	return group.rtmpPubSession != nil || group.rtspPubSession != nil || group.customizePubSession != nil ||
+		group.psPubSession != nil
 }
 
 func (group *Group) hasSubSession() bool {
 	return len(group.rtmpSubSessionSet) != 0 ||
 		len(group.httpflvSubSessionSet) != 0 ||
 		len(group.httptsSubSessionSet) != 0 ||
-		len(group.rtspSubSessionSet) != 0
+		len(group.rtspSubSessionSet) != 0 ||
+		len(group.waitRtspSubSessionSet) != 0
 }
 
 func (group *Group) hasPushSession() bool {
@@ -453,6 +564,9 @@ func (group *Group) inSessionUniqueKey() string {
 	}
 	if group.rtspPubSession != nil {
 		return group.rtspPubSession.UniqueKey()
+	}
+	if group.psPubSession != nil {
+		return group.psPubSession.UniqueKey()
 	}
 	return group.pullSessionUniqueKey()
 }
