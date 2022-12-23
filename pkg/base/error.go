@@ -46,6 +46,7 @@ var ErrHevc = errors.New("lal.hevc: fxxk")
 // ----- pkg/hls -------------------------------------------------------------------------------------------------------
 
 var ErrHls = errors.New("lal.hls: fxxk")
+var ErrHlsSessionNotFound = errors.New("lal.hls: hls session not found")
 
 // ----- pkg/rtmp ------------------------------------------------------------------------------------------------------
 
@@ -73,13 +74,20 @@ var (
 
 var ErrSdp = errors.New("lal.sdp: fxxk")
 
-// ----- pkg/logic -------------------------------------------------------------------------------------------------------
+// ----- pkg/logic -----------------------------------------------------------------------------------------------------
 
 var (
-	ErrDupInStream = errors.New("lal.logic: in stream already exist at group")
+	ErrDupInStream      = errors.New("lal.logic: in stream already exist at group")
+	ErrDisposedInStream = errors.New("lal.logic: in stream already disposed")
 
 	ErrSimpleAuthParamNotFound = errors.New("lal.logic: simple auth failed since url param lal_secret not found")
 	ErrSimpleAuthFailed        = errors.New("lal.logic: simple auth failed since url param lal_secret invalid")
+)
+
+// ----- pkg/gb28181 ---------------------------------------------------------------------------------------------------
+
+var (
+	ErrGb28181 = errors.New("lal.gb28181: fxxk")
 )
 
 // ---------------------------------------------------------------------------------------------------------------------

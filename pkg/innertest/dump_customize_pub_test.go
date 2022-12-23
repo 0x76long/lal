@@ -1,4 +1,4 @@
-// Copyright 2021, Chef.  All rights reserved.
+// Copyright 2022, Chef.  All rights reserved.
 // https://github.com/q191201771/lal
 //
 // Use of this source code is governed by a MIT-style license
@@ -6,13 +6,10 @@
 //
 // Author: Chef (191201771@qq.com)
 
-package rtprtcp_test
+package innertest
 
-import (
-	"github.com/q191201771/lal/pkg/innertest"
-	"testing"
-)
+import "testing"
 
-func TestRtpRtcp(t *testing.T) {
-	innertest.Entry(t)
+func TestDump_CutomizePub(t *testing.T) {
+
 }

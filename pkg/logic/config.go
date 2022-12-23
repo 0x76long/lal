@@ -11,7 +11,6 @@ package logic
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"strings"
 
@@ -32,6 +31,7 @@ const (
 type Config struct {
 	ConfVersion           string                `json:"conf_version"`
 	RtmpConfig            RtmpConfig            `json:"rtmp"`
+	InSessionConfig       InSessionConfig       `json:"in_session"`
 	DefaultHttpConfig     DefaultHttpConfig     `json:"default_http"`
 	HttpflvConfig         HttpflvConfig         `json:"httpflv"`
 	HlsConfig             HlsConfig             `json:"hls"`
@@ -51,12 +51,20 @@ type Config struct {
 }
 
 type RtmpConfig struct {
-	Enable                   bool   `json:"enable"`
-	Addr                     string `json:"addr"`
-	GopNum                   int    `json:"gop_num"` // TODO(chef): refactor 更名为gop_cache_num
-	MergeWriteSize           int    `json:"merge_write_size"`
-	AddDummyAudioEnable      bool   `json:"add_dummy_audio_enable"`
-	AddDummyAudioWaitAudioMs int    `json:"add_dummy_audio_wait_audio_ms"`
+	Enable               bool   `json:"enable"`
+	Addr                 string `json:"addr"`
+	RtmpsEnable          bool   `json:"rtmps_enable"`
+	RtmpsAddr            string `json:"rtmps_addr"`
+	RtmpsCertFile        string `json:"rtmps_cert_file"`
+	RtmpsKeyFile         string `json:"rtmps_key_file"`
+	GopNum               int    `json:"gop_num"` // TODO(chef): refactor 更名为gop_cache_num
+	SingleGopMaxFrameNum int    `json:"single_gop_max_frame_num"`
+	MergeWriteSize       int    `json:"merge_write_size"`
+}
+
+type InSessionConfig struct {
+	AddDummyAudioEnable      bool `json:"add_dummy_audio_enable"`
+	AddDummyAudioWaitAudioMs int  `json:"add_dummy_audio_wait_audio_ms"`
 }
 
 type DefaultHttpConfig struct {
@@ -66,13 +74,15 @@ type DefaultHttpConfig struct {
 type HttpflvConfig struct {
 	CommonHttpServerConfig
 
-	GopNum int `json:"gop_num"`
+	GopNum               int `json:"gop_num"`
+	SingleGopMaxFrameNum int `json:"single_gop_max_frame_num"`
 }
 
 type HttptsConfig struct {
 	CommonHttpServerConfig
 
-	GopNum int `json:"gop_num"`
+	GopNum               int `json:"gop_num"`
+	SingleGopMaxFrameNum int `json:"single_gop_max_frame_num"`
 }
 
 type HlsConfig struct {
@@ -80,11 +90,17 @@ type HlsConfig struct {
 
 	UseMemoryAsDiskFlag bool `json:"use_memory_as_disk_flag"`
 	hls.MuxerConfig
+	SubSessionTimeoutMs int    `json:"sub_session_timeout_ms"`
+	SubSessionHashKey   string `json:"session_hash_key"`
 }
 
 type RtspConfig struct {
 	Enable              bool   `json:"enable"`
 	Addr                string `json:"addr"`
+	RtspsEnable         bool   `json:"rtsps_enable"`
+	RtspsAddr           string `json:"rtsps_addr"`
+	RtspsCertFile       string `json:"rtsps_cert_file"`
+	RtspsKeyFile        string `json:"rtsps_key_file"`
 	OutWaitKeyFrameFlag bool   `json:"out_wait_key_frame_flag"`
 	rtsp.ServerAuthConfig
 }
@@ -164,23 +180,18 @@ type CommonHttpAddrConfig struct {
 	HttpsKeyFile    string `json:"https_key_file"`
 }
 
-func LoadConfAndInitLog(confFile string) *Config {
+func LoadConfAndInitLog(rawContent []byte) *Config {
 	var config *Config
 
-	// 读取配置文件并解析原始内容
-	rawContent, err := ioutil.ReadFile(confFile)
-	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "read conf file failed. file=%s err=%+v", confFile, err)
-		base.OsExitAndWaitPressIfWindows(1)
-	}
-	if err = json.Unmarshal(rawContent, &config); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "unmarshal conf file failed. file=%s err=%+v", confFile, err)
+	// 读取配置并解析原始内容
+	if err := json.Unmarshal(rawContent, &config); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "unmarshal conf file failed. raw content=%s err=%+v", rawContent, err)
 		base.OsExitAndWaitPressIfWindows(1)
 	}
 
 	j, err := nazajson.New(rawContent)
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "nazajson unmarshal conf file failed. file=%s err=%+v", confFile, err)
+		_, _ = fmt.Fprintf(os.Stderr, "nazajson unmarshal conf file failed. raw content=%s err=%+v", rawContent, err)
 		base.OsExitAndWaitPressIfWindows(1)
 	}
 
@@ -285,16 +296,21 @@ func LoadConfAndInitLog(confFile string) *Config {
 			config.HlsConfig.FragmentNum)
 		config.HlsConfig.DeleteThreshold = config.HlsConfig.FragmentNum
 	}
+	if config.HlsConfig.SubSessionHashKey != "" && config.HlsConfig.SubSessionTimeoutMs == 0 {
+		// 没有设置超时值，或者超时为0时
+		Log.Warnf("config hls.sub_session_timeout_ms is 0. set to %d(which is fragment_num * fragment_duration_ms * 2)",
+			config.HlsConfig.FragmentNum*config.HlsConfig.FragmentDurationMs*2)
+	}
 	if (config.HttpflvConfig.Enable || config.HttpflvConfig.EnableHttps) && !j.Exist("httpflv.url_pattern") {
-		Log.Warnf("config httpflv.url_pattern not exist. set to default wchich is %s", defaultHttpflvUrlPattern)
+		Log.Warnf("config httpflv.url_pattern not exist. set to default which is %s", defaultHttpflvUrlPattern)
 		config.HttpflvConfig.UrlPattern = defaultHttpflvUrlPattern
 	}
 	if (config.HttptsConfig.Enable || config.HttptsConfig.EnableHttps) && !j.Exist("httpts.url_pattern") {
-		Log.Warnf("config httpts.url_pattern not exist. set to default wchich is %s", defaultHttptsUrlPattern)
+		Log.Warnf("config httpts.url_pattern not exist. set to default which is %s", defaultHttptsUrlPattern)
 		config.HttptsConfig.UrlPattern = defaultHttptsUrlPattern
 	}
 	if (config.HlsConfig.Enable || config.HlsConfig.EnableHttps) && !j.Exist("hls.url_pattern") {
-		Log.Warnf("config hls.url_pattern not exist. set to default wchich is %s", defaultHlsUrlPattern)
+		Log.Warnf("config hls.url_pattern not exist. set to default which is %s", defaultHlsUrlPattern)
 		config.HttpflvConfig.UrlPattern = defaultHlsUrlPattern
 	}
 
@@ -324,7 +340,7 @@ func LoadConfAndInitLog(confFile string) *Config {
 		tlines = append(tlines, strings.TrimSpace(l))
 	}
 	compactRawContent := strings.Join(tlines, " ")
-	Log.Infof("load conf file succ. filename=%s, raw content=%s parsed=%+v", confFile, compactRawContent, config)
+	Log.Infof("load conf succ. raw content=%s parsed=%+v", compactRawContent, config)
 
 	return config
 }
