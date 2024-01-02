@@ -1,12 +1,26 @@
 #!/usr/bin/env bash
 
 #set -x
+go env -w GO111MODULE=on
+go env -w GOPROXY=https://goproxy.cn,https://goproxy.io,direct
+export GO111MODULE=on
+export GOPROXY=https://goproxy.cn,https://goproxy.io,direct
+THIS_FILE=$(readlink -f $0)
+# readlink have no -f param in some macos
+if [ $? -ne 0 ]; then
+  cd `dirname $0`
+  TARGET_FILE=`basename $0`
+  PHYS_DIR=`pwd -P`
+  THIS_FILE=$PHYS_DIR/$TARGET_FILE
+  cd -
+fi
+THIS_DIR=$(dirname $THIS_FILE)
+ROOT_DIR=${THIS_DIR}/..
 
-ROOT_DIR=`pwd`
-OUT_DIR=bin
+OUT_DIR=${ROOT_DIR}/bin
 
-if [ ! -d ${ROOT_DIR}/${OUT_DIR} ]; then
-  mkdir ${ROOT_DIR}/${OUT_DIR}
+if [ ! -d ${OUT_DIR} ]; then
+  mkdir ${OUT_DIR}
 fi
 
 #GitTag=`git tag --sort=version:refname | tail -n 1`
@@ -18,6 +32,7 @@ GitCommitLog=${GitCommitLog//\'/\"}
 GitStatus=`git status -s`
 BuildTime=`date +'%Y.%m.%d.%H%M%S'`
 BuildGoVersion=`go version`
+#WebUITpl=`cat lal.html`
 
 LDFlags=" \
     -X 'github.com/q191201771/naza/pkg/bininfo.GitTag=${GitTag}' \
@@ -27,15 +42,17 @@ LDFlags=" \
     -X 'github.com/q191201771/naza/pkg/bininfo.BuildGoVersion=${BuildGoVersion}' \
 "
 
+#-X 'github.com/q191201771/lal/pkg/logic.webUITpl=${WebUITpl}' \
+
 echo "build" ${ROOT_DIR}/app/lalserver "..."
-cd ${ROOT_DIR}/app/lalserver && go build -ldflags "$LDFlags" -o ${ROOT_DIR}/${OUT_DIR}/lalserver
-#cd ${ROOT_DIR}/app/lalserver && go build -race -ldflags "$LDFlags" -o ${ROOT_DIR}/${OUT_DIR}/lalserver.debug
+cd ${ROOT_DIR}/app/lalserver && go build -ldflags "$LDFlags" -o ${OUT_DIR}/lalserver
+#cd ${ROOT_DIR}/app/lalserver && go build -race -ldflags "$LDFlags" -o ${OUT_DIR}/lalserver.debug
 
 for file in `ls ${ROOT_DIR}/app/demo`
 do
   if [ -d ${ROOT_DIR}/app/demo/${file} ]; then
     echo "build" ${ROOT_DIR}/app/demo/${file} "..."
-    cd ${ROOT_DIR}/app/demo/${file} && go build -ldflags "$LDFlags" -o ${ROOT_DIR}/${OUT_DIR}/${file}
+    cd ${ROOT_DIR}/app/demo/${file} && go build -ldflags "$LDFlags" -o ${OUT_DIR}/${file}
   fi
 done
 
@@ -44,11 +61,11 @@ if [ -d "./playground" ]; then
   do
     if [ -d ${ROOT_DIR}/playground/${file} ]; then
       echo "build" ${ROOT_DIR}/playgound/${file} "..."
-      cd ${ROOT_DIR}/playground/${file} && go build -ldflags "$LDFlags" -o ${ROOT_DIR}/${OUT_DIR}/${file}
+      cd ${ROOT_DIR}/playground/${file} && go build -ldflags "$LDFlags" -o ${OUT_DIR}/${file}
     fi
   done
 fi
 
-${ROOT_DIR}/${OUT_DIR}/lalserver -v &&
-ls -lrt ${ROOT_DIR}/${OUT_DIR} &&
+${OUT_DIR}/lalserver -v &&
+ls -lrt ${OUT_DIR} &&
 echo 'build done.'

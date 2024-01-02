@@ -1,3 +1,79 @@
+#### v0.36.7 (2023-07)
+
+- [feat] customize: 支持将流输出给业务方做二次开发
+- [opt] logic: 在业务方WithOnHookSession的情况下，停用auto stop relay pull功能。（业务方如果想auto stop relay pull，可以在业务层自行判断、决定是否stop relay pull） #292
+- [opt] logic: 将NotifyHandler回调异步化到独立协程中 #281
+- [feat] http api中流信息中增加fps字段
+- [fix] rtsp: 播放不存在的rtsp流，超时没有彻底释放
+- [refactor] 整理所有跨域的代码
+- [refactor] 整理所有超时相关的代码
+- [opt] rtsp: 支持处理时间戳翻滚的情况 #281
+- [opt] rtsp: new configable var BaseInSessionTimestampFilterFlag #281
+- [fix] rtp: 修复解析ext扩展数据的bug
+- [fix] mpegts: 转ts时，pmt中的avc标志写错导致vlc无法播放h264编码的视频 #284 #277
+- [fix] rtmp2mpegts: 确保pts有值
+- [fix] hls: fix panic, check IMuxerObserver nil
+- [fix] rtmp: 解析Amf0TypeMarkerUndefined和Amf0TypeMarkerUnsupported
+- [opt] rtmp: 兼容publish信令中没有pubType字段的情况 #280
+- [fix] rtmp: 当ClientSession配置项WriteChanSize为0时，不必要开启异步发送
+- [opt] rtmp2rtsp: 兼容音频格式写在metadata中的情况
+- [feat] remux: Rtmp2AvPacketRemuxer增加参数用于指定是否需要丢弃SEI
+- [fix] remux: Rtmp2AvPacketRemuxer多slice时append sps错误导致花屏
+- [chore] all shell file go to script folder
+- [chore] 所有脚本+x增加执行权限，保证CI正常运行
+- [chore] 修复macos平台readlink没有-f参数导致脚本执行失败的问题
+- [fix] webui: read null when no group
+- [fix] connection: not working set ModWriteChanSize
+- [fix] not working timout for RTMP server session
+- [test] dump rtsp test support video
+- [refactor] hevc: 暴露hevc.Context中的所有字段
+- [refactor] avc: 暴露avc.Context中的Sps结构体字段
+
+#### v0.35.4 (2023-04)
+
+- [feat] rtmp: 推流支持enhanced RTMP
+- [feat] rtsp2rtmp支持G711
+- [opt] rtsp: client端使用UDP收到461则切换成TCP（反之也然）
+- [opt] mpegts根据编码格式打包patpmt（提高纯视频流的兼容性）
+- [opt] HTTP-API: 支持跨域
+- [fix] rtmp: 解析amf strict array
+- [fix] rtmp转mpegts处理时间戳错误，导致有b帧时ffplay播放hls报错
+- [fix] GetSamplingFrequency missing 24000
+- [fix] simplifing logic to enable fragment_duration_ms on configuration to be under thousands (but not below hundreds)
+- [fix] 解决CustomizePubSessionContext使用dumpFile空指针导致崩溃的问题
+- [test] unit test for base.DumpFile
+- [chore] 在编译脚本和测试脚本中显示指定开启go mod
+
+#### v0.34.3 (2023-03)
+
+- [feat] rtmp2rtsp: 支持 G711A/G711U
+- [opt] rtsp: 兼容G711 SDP，支持RTSP G711间的转发
+- [feat] 增加Web页面（基于HTTP-API）
+- [fix] rtmp: 修复微信小程序推流卡的问题（绝对时间戳字段应该从属于stream维度而非connection）
+- [feat] rtmp: server session支持发送ack
+- [opt] rtmp: client session 只使用PeerWinAckSize的值作为是否发送ack的触发条件
+- [refactor] using Go embed to load lal.html
+- [refactor] remove deprecated io/ioutil packages
+- [opt] rtmp: ClientSession支持定制化tls.Config
+- [fix] 修复解析配置文件中sub_session_hash_key字段写错的bug
+- [log] add log when not caching frame by SingleGopMaxFrameNum
+- [chore] 增加检查版本的脚本check_versions.sh
+
+#### v0.33.0 (2023-01)
+
+- [feat] debug dump，支持抓取流数据回放调试
+- [feat] http api & notify: 支持获取hls播放者数量、码率等信息；支持获取hls开始播放、结束播放的事件通知
+- [fix] rtp: 解析rtp extension扩展头，避免因此导致rtp解析失败
+- [chore] docker同时支持amd和arm架构
+- [feat] demo: analyseflv支持http flv流或flv文件作为输入
+- [feat] 插件化例子：增加读取flv文件再通过CustomPubSession将数据输入lalserver的例子
+- [opt] rtmp: 缩小打chunk时预分配的内存大小
+- [opt] 插件化：Cutsomize Pub支持AvPacket、RtmpMsg两种输入数据的方式
+- [opt] Gop缓冲功能支持配置单个Gop内的最大缓冲帧数量
+- [fix] 修复hls获取app name失败的问题
+- [fix] flv: 修复ReadAllTagsFromFlvFile中没有关闭文件的bug
+- [fix] rtmp: 接收buff解析前有效长度检查
+
 #### v0.32.0 (2022-11-10)
 
 - [feat] 自动叠加静音音频。所有协议、所有类型的输入流都已支持，文档见: https://pengrl.com/lal/#/dummy_audio

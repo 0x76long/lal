@@ -11,6 +11,7 @@ package base
 import (
 	"encoding/hex"
 	"fmt"
+
 	"github.com/q191201771/naza/pkg/nazabytes"
 )
 
@@ -20,9 +21,11 @@ type AvPacketPt int
 
 const (
 	AvPacketPtUnknown AvPacketPt = -1
+	AvPacketPtG711U   AvPacketPt = 0  // g711u
+	AvPacketPtG711A   AvPacketPt = 8  // g711a
 	AvPacketPtAvc     AvPacketPt = 96 // h264
 	AvPacketPtHevc    AvPacketPt = 98 // h265
-	AvPacketPtAac     AvPacketPt = 97
+	AvPacketPtAac     AvPacketPt = 97 // aac
 )
 
 func (a AvPacketPt) ReadableString() string {
@@ -53,7 +56,7 @@ type AvPacket struct {
 }
 
 func (packet *AvPacket) IsAudio() bool {
-	return packet.PayloadType == AvPacketPtAac
+	return packet.PayloadType == AvPacketPtAac || packet.PayloadType == AvPacketPtG711A || packet.PayloadType == AvPacketPtG711U
 }
 
 func (packet *AvPacket) IsVideo() bool {
@@ -62,7 +65,7 @@ func (packet *AvPacket) IsVideo() bool {
 
 func (packet *AvPacket) DebugString() string {
 	return fmt.Sprintf("[%p] type=%s, timestamp=%d, pts=%d, len=%d, payload=%s",
-		packet, packet.PayloadType.ReadableString(), packet.Timestamp, packet.Pts, len(packet.Payload), hex.Dump(nazabytes.Prefix(packet.Payload, 8)))
+		packet, packet.PayloadType.ReadableString(), packet.Timestamp, packet.Pts, len(packet.Payload), hex.Dump(nazabytes.Prefix(packet.Payload, 32)))
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

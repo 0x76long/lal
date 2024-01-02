@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/q191201771/lal/pkg/gb28181"
 
@@ -65,6 +66,10 @@ import (
 //                                                                                                                                              -> ...
 //                                                                                                                                              -> ...
 
+type GroupOption struct {
+	onHookSession func(uniqueKey string, streamName string) ICustomizeHookSessionContext
+}
+
 type IGroupObserver interface {
 	CleanupHlsIfNeeded(appName string, streamName string, path string)
 	OnHlsMakeTs(info base.HlsMakeTsInfo)
@@ -77,7 +82,11 @@ type Group struct {
 	appName    string // const after init
 	streamName string // const after init TODO chef: 和stat里的字段重复，可以删除掉
 	config     *Config
-	observer   IGroupObserver
+
+	option                      GroupOption
+	customizeHookSessionContext ICustomizeHookSessionContext
+
+	observer IGroupObserver
 
 	exitChan chan struct{}
 
@@ -108,12 +117,11 @@ type Group struct {
 	// mpegts使用
 	patpmt []byte
 	// sub
-	rtmpSubSessionSet     map[*rtmp.ServerSession]struct{}
-	httpflvSubSessionSet  map[*httpflv.SubSession]struct{}
-	httptsSubSessionSet   map[*httpts.SubSession]struct{}
-	rtspSubSessionSet     map[*rtsp.SubSession]struct{}
-	waitRtspSubSessionSet map[*rtsp.SubSession]struct{}
-	hlsSubSessionSet      map[*hls.SubSession]struct{}
+	rtmpSubSessionSet    map[*rtmp.ServerSession]struct{}
+	httpflvSubSessionSet map[*httpflv.SubSession]struct{}
+	httptsSubSessionSet  map[*httpts.SubSession]struct{}
+	rtspSubSessionSet    map[*rtsp.SubSession]struct{} // 注意，使用这个容器时，一定要注意 session 的 Stage 属性
+	hlsSubSessionSet     map[*hls.SubSession]struct{}
 	// push
 	pushEnable    bool
 	url2PushProxy map[string]*pushProxy
@@ -127,13 +135,15 @@ type Group struct {
 	//
 	stat base.StatGroup
 	//
+	inVideoFpsRecords base.PeriodRecord
+	//
 	hlsCalcSessionStatIntervalSec uint32
 	//
 	psPubDumpFile    *base.DumpFile
 	rtspPullDumpFile *base.DumpFile
 }
 
-func NewGroup(appName string, streamName string, config *Config, observer IGroupObserver) *Group {
+func NewGroup(appName string, streamName string, config *Config, option GroupOption, observer IGroupObserver) *Group {
 	uk := base.GenUkGroup()
 
 	g := &Group{
@@ -141,23 +151,28 @@ func NewGroup(appName string, streamName string, config *Config, observer IGroup
 		appName:    appName,
 		streamName: streamName,
 		config:     config,
+		option:     option,
 		observer:   observer,
 		stat: base.StatGroup{
 			StreamName: streamName,
 			AppName:    appName,
 		},
-		exitChan:                      make(chan struct{}, 1),
-		rtmpSubSessionSet:             make(map[*rtmp.ServerSession]struct{}),
-		httpflvSubSessionSet:          make(map[*httpflv.SubSession]struct{}),
-		httptsSubSessionSet:           make(map[*httpts.SubSession]struct{}),
-		rtspSubSessionSet:             make(map[*rtsp.SubSession]struct{}),
-		waitRtspSubSessionSet:         make(map[*rtsp.SubSession]struct{}),
-		hlsSubSessionSet:              make(map[*hls.SubSession]struct{}),
-		rtmpGopCache:                  remux.NewGopCache("rtmp", uk, config.RtmpConfig.GopNum, config.RtmpConfig.SingleGopMaxFrameNum),
-		httpflvGopCache:               remux.NewGopCache("httpflv", uk, config.HttpflvConfig.GopNum, config.HttpflvConfig.SingleGopMaxFrameNum),
-		httptsGopCache:                remux.NewGopCacheMpegts(uk, config.HttptsConfig.GopNum, config.HttptsConfig.SingleGopMaxFrameNum),
-		psPubPrevInactiveCheckTick:    -1,
-		hlsCalcSessionStatIntervalSec: uint32(config.HlsConfig.FragmentDurationMs/1000) * 10,
+		exitChan:                   make(chan struct{}, 1),
+		rtmpSubSessionSet:          make(map[*rtmp.ServerSession]struct{}),
+		httpflvSubSessionSet:       make(map[*httpflv.SubSession]struct{}),
+		httptsSubSessionSet:        make(map[*httpts.SubSession]struct{}),
+		rtspSubSessionSet:          make(map[*rtsp.SubSession]struct{}),
+		hlsSubSessionSet:           make(map[*hls.SubSession]struct{}),
+		rtmpGopCache:               remux.NewGopCache("rtmp", uk, config.RtmpConfig.GopNum, config.RtmpConfig.SingleGopMaxFrameNum),
+		httpflvGopCache:            remux.NewGopCache("httpflv", uk, config.HttpflvConfig.GopNum, config.HttpflvConfig.SingleGopMaxFrameNum),
+		httptsGopCache:             remux.NewGopCacheMpegts(uk, config.HttptsConfig.GopNum, config.HttptsConfig.SingleGopMaxFrameNum),
+		psPubPrevInactiveCheckTick: -1,
+		inVideoFpsRecords:          base.NewPeriodRecord(32),
+	}
+
+	g.hlsCalcSessionStatIntervalSec = uint32(config.HlsConfig.FragmentDurationMs / 100) // equals to (ms/1000) * 10
+	if g.hlsCalcSessionStatIntervalSec == 0 {
+		g.hlsCalcSessionStatIntervalSec = defaultHlsCalcSessionStatIntervalSec
 	}
 
 	g.initRelayPushByConfig()
@@ -229,10 +244,6 @@ func (group *Group) Dispose() {
 		session.Dispose()
 	}
 	group.rtspSubSessionSet = nil
-	for session := range group.waitRtspSubSessionSet {
-		session.Dispose()
-	}
-	group.waitRtspSubSessionSet = nil
 
 	for session := range group.httpflvSubSessionSet {
 		session.Dispose()
@@ -302,13 +313,7 @@ func (group *Group) GetStat(maxsub int) base.StatGroup {
 		}
 		group.stat.StatSubs = append(group.stat.StatSubs, base.Session2StatSub(s))
 	}
-	for s := range group.waitRtspSubSessionSet {
-		statSubCount++
-		if statSubCount > maxsub {
-			break
-		}
-		group.stat.StatSubs = append(group.stat.StatSubs, base.Session2StatSub(s))
-	}
+
 	for s := range group.hlsSubSessionSet {
 		statSubCount++
 		if statSubCount > maxsub {
@@ -317,6 +322,8 @@ func (group *Group) GetStat(maxsub int) base.StatGroup {
 		group.stat.StatSubs = append(group.stat.StatSubs, base.Session2StatSub(s))
 	}
 
+	group.stat.GetFpsFrom(&group.inVideoFpsRecords, time.Now().Unix())
+
 	return group.stat
 }
 
@@ -324,7 +331,7 @@ func (group *Group) KickSession(sessionId string) bool {
 	group.mutex.Lock()
 	defer group.mutex.Unlock()
 
-	Log.Infof("[%s] kick out session. session id=%s", group.UniqueKey, sessionId)
+	Log.Infof("[%s] kick session. session id=%s", group.UniqueKey, sessionId)
 
 	if strings.HasPrefix(sessionId, base.UkPreRtmpServerSession) {
 		if group.rtmpPubSession != nil && group.rtmpPubSession.UniqueKey() == sessionId {
@@ -371,12 +378,6 @@ func (group *Group) KickSession(sessionId string) bool {
 				return true
 			}
 		}
-		for s := range group.waitRtspSubSessionSet {
-			if s.UniqueKey() == sessionId {
-				s.Dispose()
-				return true
-			}
-		}
 	} else {
 		Log.Errorf("[%s] kick session while session id format invalid. %s", group.UniqueKey, sessionId)
 	}
@@ -415,15 +416,13 @@ func (group *Group) OutSessionNum() int {
 			pushNum++
 		}
 	}
-	return len(group.rtmpSubSessionSet) + len(group.rtspSubSessionSet) + len(group.waitRtspSubSessionSet) +
+	return len(group.rtmpSubSessionSet) + len(group.rtspSubSessionSet) +
 		len(group.httpflvSubSessionSet) + len(group.httptsSubSessionSet) + pushNum
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 
 // disposeInactiveSessions 关闭不活跃的session
-//
-// TODO chef: [refactor] 梳理和naza.Connection超时重复部分
 func (group *Group) disposeInactiveSessions(tickCount uint32) {
 	if group.psPubSession != nil {
 		if group.psPubTimeoutSec == 0 {
@@ -443,9 +442,9 @@ func (group *Group) disposeInactiveSessions(tickCount uint32) {
 		}
 	}
 
-	// 以下都是以 checkSessionAliveIntervalSec 为间隔的清理逻辑
+	// 以下都是以 CheckSessionAliveIntervalSec 为间隔的清理逻辑
 
-	if tickCount%checkSessionAliveIntervalSec != 0 {
+	if tickCount%CheckSessionAliveIntervalSec != 0 {
 		return
 	}
 
@@ -476,12 +475,7 @@ func (group *Group) disposeInactiveSessions(tickCount uint32) {
 			session.Dispose()
 		}
 	}
-	for session := range group.waitRtspSubSessionSet {
-		if _, writeAlive := session.IsAlive(); !writeAlive {
-			Log.Warnf("[%s] session timeout. session=%s", group.UniqueKey, session.UniqueKey())
-			session.Dispose()
-		}
-	}
+
 	for session := range group.httpflvSubSessionSet {
 		if _, writeAlive := session.IsAlive(); !writeAlive {
 			Log.Warnf("[%s] session timeout. session=%s", group.UniqueKey, session.UniqueKey())
@@ -531,9 +525,7 @@ func (group *Group) updateAllSessionStat() {
 	for session := range group.rtspSubSessionSet {
 		session.UpdateStat(calcSessionStatIntervalSec)
 	}
-	for session := range group.waitRtspSubSessionSet {
-		session.UpdateStat(calcSessionStatIntervalSec)
-	}
+
 	for _, item := range group.url2PushProxy {
 		session := item.pushSession
 		if item.isPushing && session != nil {
@@ -552,8 +544,8 @@ func (group *Group) hasSubSession() bool {
 		len(group.httpflvSubSessionSet) != 0 ||
 		len(group.httptsSubSessionSet) != 0 ||
 		len(group.rtspSubSessionSet) != 0 ||
-		len(group.waitRtspSubSessionSet) != 0 ||
-		len(group.hlsSubSessionSet) != 0
+		len(group.hlsSubSessionSet) != 0 ||
+		group.customizeHookSessionContext != nil
 }
 
 func (group *Group) hasPushSession() bool {

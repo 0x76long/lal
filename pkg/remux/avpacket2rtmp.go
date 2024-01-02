@@ -23,9 +23,10 @@ import (
 //
 // 目前AvPacket来自:
 //
-// - RTSP: sdp以及rtp的合帧包
+// - RTSP:       sdp以及rtp的合帧包
 // - gb28181 ps: rtp的合帧包
-// - customize: 业务方通过接口向lalserver输入的流
+// - customize:  业务方通过接口向lalserver输入的流
+// - ffmpeg:     ffmpeg编码后的数据
 // - 理论上也支持webrtc，后续接入webrtc时再验证
 type AvPacket2RtmpRemuxer struct {
 	option    base.AvPacketStreamOption
@@ -55,6 +56,8 @@ func NewAvPacket2RtmpRemuxer() *AvPacket2RtmpRemuxer {
 // TODO(chef): [refactor] 返回*AvPacket2RtmpRemuxer 202208
 func (r *AvPacket2RtmpRemuxer) WithOption(modOption func(option *base.AvPacketStreamOption)) {
 	modOption(&r.option)
+
+	// TODO(chef): [log] 打印所有option 202301
 }
 
 func (r *AvPacket2RtmpRemuxer) WithOnRtmpMsg(onRtmpMsg rtmp.OnReadRtmpAvMsg) *AvPacket2RtmpRemuxer {
@@ -100,7 +103,7 @@ func (r *AvPacket2RtmpRemuxer) InitWithAvConfig(asc, vps, sps, pps []byte) {
 	}
 
 	if r.audioType == base.AvPacketPtUnknown && r.videoType == base.AvPacketPtUnknown {
-		Log.Warn("has no audio or video")
+		Log.Warn("neither audio nor video exist")
 		return
 	}
 
@@ -303,6 +306,22 @@ func (r *AvPacket2RtmpRemuxer) FeedAvPacket(pkt base.AvPacket) {
 			copy(payload[2:], pkt.Payload[7:])
 			r.emitRtmpAvMsg(true, payload, pkt.Timestamp)
 		}
+
+	case base.AvPacketPtG711A:
+		length := len(pkt.Payload) + 1
+		payload := make([]byte, length)
+		// ffmpeg是固定值
+		payload[0] = 0x72
+		copy(payload[1:], pkt.Payload)
+		r.emitRtmpAvMsg(true, payload, pkt.Timestamp)
+
+	case base.AvPacketPtG711U:
+		length := len(pkt.Payload) + 1
+		payload := make([]byte, length)
+		// ffmpeg是固定值
+		payload[0] = 0x82
+		copy(payload[1:], pkt.Payload)
+		r.emitRtmpAvMsg(true, payload, pkt.Timestamp)
 
 	default:
 		Log.Warnf("unsupported packet. type=%d", pkt.PayloadType)

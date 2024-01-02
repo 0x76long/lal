@@ -9,10 +9,14 @@
 package rtprtcp
 
 import (
+	"encoding/hex"
+	"fmt"
+
 	"github.com/q191201771/lal/pkg/avc"
 	"github.com/q191201771/lal/pkg/base"
 	"github.com/q191201771/lal/pkg/hevc"
 	"github.com/q191201771/naza/pkg/bele"
+	"github.com/q191201771/naza/pkg/nazabytes"
 )
 
 // -----------------------------------
@@ -136,6 +140,7 @@ func ParseRtpHeader(b []byte) (h RtpHeader, err error) {
 		offset += 4
 	}
 
+	// TODO 按照RFC-5285-RTP-Header-Extensions去解析
 	if h.Extension != 0 {
 		if offset+4 > len(b) {
 			return h, base.ErrRtpRtcpShortBuffer
@@ -146,8 +151,13 @@ func ParseRtpHeader(b []byte) (h RtpHeader, err error) {
 		offset += 2
 		extensionLength := bele.BeUint16(b[offset:])
 		offset += 2
-		h.Extensions = b[offset : offset+int(extensionLength)]
 
+		if offset+int(4*extensionLength) > len(b) {
+			return h, base.ErrRtpRtcpShortBuffer
+		}
+
+		h.Extensions = b[offset : offset+int(4*extensionLength)]
+		offset += int(4 * extensionLength)
 	}
 
 	if offset >= len(b) {
@@ -183,6 +193,10 @@ func (p *RtpPacket) Body() []byte {
 	}
 
 	return p.Raw[p.Header.payloadOffset:]
+}
+
+func (p *RtpPacket) DebugString() string {
+	return fmt.Sprintf("%+v, raw=%s", p.Header, hex.Dump(nazabytes.Prefix(p.Raw, 32)))
 }
 
 // IsAvcHevcBoundary

@@ -17,6 +17,7 @@ import (
 // Frame 帧数据，用于打包成mpegts格式的数据
 type Frame struct {
 	Pts uint64 // =(毫秒 * 90)
+	Cts uint32
 	Dts uint64
 	Cc  uint8 // continuity_counter of TS Header
 
@@ -114,10 +115,16 @@ func (frame *Frame) Pack() []byte {
 				// reserved
 				// program_clock_reference_extension
 				// --------------------------------------
-				packet[3] |= 0x20                    // adaptation_field_control 设置Adaptation
-				packet[4] = 7                        // adaptation_field_length
-				packet[5] = 0x50                     // random_access_indicator + PCR_flag
-				packPcr(packet[6:], frame.Dts-delay) // using 6 byte
+				packet[3] |= 0x20 // adaptation_field_control 设置Adaptation
+				packet[4] = 7     // adaptation_field_length
+				packet[5] = 0x50  // random_access_indicator + PCR_flag
+
+				pcr := uint64(0)
+				if frame.Dts > delay {
+					pcr = frame.Dts - delay
+				}
+				packPcr(packet[6:], pcr) // using 6 byte
+
 				wpos += 8
 			}
 

@@ -11,3 +11,7 @@ package rtsp
 import "github.com/q191201771/naza/pkg/nazalog"
 
 var Log = nazalog.GetGlobalLogger()
+
+// BaseInSessionTimestampFilterFlag 控制输入 BaseInSession 的音视频数据是否开启时间戳过滤器，也即经过 AvPacketQueue 处理
+var BaseInSessionTimestampFilterFlag = true
+var TimestampFilterHandleRotateFlag = true

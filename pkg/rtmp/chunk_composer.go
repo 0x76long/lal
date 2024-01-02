@@ -64,7 +64,6 @@ type OnCompleteMessage func(stream *Stream) error
 func (c *ChunkComposer) RunLoop(reader io.Reader, cb OnCompleteMessage) error {
 	var aggregateStream *Stream
 	bootstrap := make([]byte, 11)
-	absTsFlag := false
 
 	for {
 		// 5.3.1.1. Chunk Basic Header
@@ -104,7 +103,7 @@ func (c *ChunkComposer) RunLoop(reader io.Reader, cb OnCompleteMessage) error {
 			// 包头中为绝对时间戳
 			stream.timestamp = bele.BeUint24(bootstrap)
 			stream.header.TimestampAbs = stream.timestamp
-			absTsFlag = true
+			stream.absTsFlag = true
 			stream.header.MsgLen = bele.BeUint24(bootstrap[3:])
 			stream.header.MsgTypeId = bootstrap[6]
 			stream.header.MsgStreamId = int(bele.LeUint32(bootstrap[7:]))
@@ -184,16 +183,18 @@ func (c *ChunkComposer) RunLoop(reader io.Reader, cb OnCompleteMessage) error {
 		if stream.msg.Len() == stream.header.MsgLen {
 			// 对端设置了chunk size
 			if stream.header.MsgTypeId == base.RtmpTypeIdSetChunkSize {
-				val := bele.BeUint32(stream.msg.buff.Bytes())
-				c.SetPeerChunkSize(val)
+				if buf := stream.msg.buff.Bytes(); len(buf) >= 4 {
+					val := bele.BeUint32(buf)
+					c.SetPeerChunkSize(val)
+				}
 			}
 
 			stream.header.Csid = csid
-			if !absTsFlag {
+			if !stream.absTsFlag {
 				// 这么处理相当于取最后一个chunk的时间戳差值，有的协议栈是取的第一个，正常来说都可以
 				stream.header.TimestampAbs += stream.timestamp
 			}
-			absTsFlag = false
+			stream.absTsFlag = false
 			if Log.GetOption().Level == nazalog.LevelTrace {
 				tmpMsg := stream.toAvMsg()
 				maxLength := 32
