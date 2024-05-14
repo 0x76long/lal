@@ -10,7 +10,6 @@ package hevc
 
 import (
 	"bytes"
-
 	"github.com/q191201771/naza/pkg/nazaerrors"
 
 	"github.com/q191201771/lal/pkg/base"
@@ -251,7 +250,46 @@ func ParseVpsSpsPpsFromSeqHeaderWithoutMalloc(payload []byte) (vps, sps, pps []b
 		return nil, nil, nil, nazaerrors.Wrap(base.ErrHevc)
 	}
 
-	return parseVpsSpsPpsFromRecord(payload)
+	vps, sps, pps, err = parseVpsSpsPpsFromRecord(payload)
+	if err != nil && StrategyTryAnnexbWhenParseVspFromSeqHeaderFailed {
+		//Log.Warnf("parse vps sps pps from seq header failed. try parse from annexb. payload=%s, err=%+v", hex.Dump(payload), err)
+		vps, sps, pps, err = parseVpsSpsPpsAnnexbFromRecord(payload)
+	}
+
+	return
+}
+
+// TODO(chef): 函数中vps/sps/pps变量指向的为新申请的内存块，与调用它的函数ParseVpsSpsPpsFromSeqHeaderWithoutMalloc中的WithoutMalloc语义不相符 202405
+func parseVpsSpsPpsAnnexbFromRecord(payload []byte) (vps, sps, pps []byte, err error) {
+	for i := 0; i < len(payload)-4; {
+		start := bytes.Index(payload[i:], NaluStartCode4)
+		if start == -1 {
+			break
+		}
+		i += start
+		var end int
+		if endIdx := bytes.Index(payload[i+4:], NaluStartCode4); endIdx != -1 {
+			end = endIdx + 4
+		} else {
+			end = len(payload) - i
+		}
+		nal := payload[i+4 : i+end]
+		typ := ParseNaluType(nal[0])
+		switch typ {
+		case NaluTypeVps:
+			vps = append(vps, nal...)
+		case NaluTypeSps:
+			sps = append(sps, nal...)
+		case NaluTypePps:
+			pps = append(pps, nal...)
+		}
+		i += end
+	}
+
+	if len(vps) == 0 || len(sps) == 0 || len(pps) == 0 {
+		return nil, nil, nil, nazaerrors.Wrap(base.ErrHevc)
+	}
+	return
 }
 
 func parseVpsSpsPpsFromRecord(payload []byte) (vps, sps, pps []byte, err error) {
