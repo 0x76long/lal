@@ -9,8 +9,8 @@
 package logic
 
 import (
-	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -27,7 +27,6 @@ import (
 	"github.com/q191201771/lal/pkg/rtmp"
 	"github.com/q191201771/lal/pkg/rtsp"
 	"github.com/q191201771/naza/pkg/defertaskthread"
-	"github.com/q191201771/naza/pkg/nazalog"
 	//"github.com/felixge/fgprof"
 )
 
@@ -55,6 +54,8 @@ type ServerManager struct {
 	onHookSession func(uniqueKey string, streamName string) ICustomizeHookSessionContext
 
 	notifyHandlerThread taskpool.Pool
+
+	ipBlacklist IpBlacklist
 }
 
 func NewServerManager(modOption ...ModOption) *ServerManager {
@@ -71,33 +72,15 @@ func NewServerManager(modOption ...ModOption) *ServerManager {
 
 	rawContent := sm.option.ConfRawContent
 	if len(rawContent) == 0 {
-		confFile := sm.option.ConfFilename
-		// 运行参数中没有配置文件，尝试从几个默认位置读取
-		if confFile == "" {
-			nazalog.Warnf("config file did not specify in the command line, try to load it in the usual path.")
-			confFile = firstExistDefaultConfFilename()
-
-			// 所有默认位置都找不到配置文件，退出程序
-			if confFile == "" {
-				// TODO(chef): refactor ILalserver既然已经作为package提供了，那么内部就不应该包含flag和os exit的操作，应该返回给上层
-				// TODO(chef): refactor new中逻辑是否该往后移
-				flag.Usage()
-				_, _ = fmt.Fprintf(os.Stderr, `
+		rawContent = base.WrapReadConfigFile(sm.option.ConfFilename, DefaultConfFilenameList, func() {
+			_, _ = fmt.Fprintf(os.Stderr, `
 Example:
   %s -c %s
 
 Github: %s
 Doc: %s
 `, os.Args[0], filepath.FromSlash("./conf/lalserver.conf.json"), base.LalGithubSite, base.LalDocSite)
-				base.OsExitAndWaitPressIfWindows(1)
-			}
-		}
-		var err error
-		rawContent, err = os.ReadFile(confFile)
-		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "read conf file failed. file=%s err=%+v", confFile, err)
-			base.OsExitAndWaitPressIfWindows(1)
-		}
+		})
 	}
 	sm.config = LoadConfAndInitLog(rawContent)
 	base.LogoutStartInfo()
@@ -812,6 +795,7 @@ func (sm *ServerManager) serveHls(writer http.ResponseWriter, req *http.Request)
 		Log.Errorf("parse url. err=%+v", err)
 		return
 	}
+
 	if urlCtx.GetFileType() == "m3u8" {
 		// TODO(chef): [refactor] 需要整理，这里使用 hls.PathStrategy 不太好 202207
 		streamName := hls.PathStrategy.GetRequestInfo(urlCtx, sm.config.HlsConfig.OutPath).StreamName
@@ -821,20 +805,20 @@ func (sm *ServerManager) serveHls(writer http.ResponseWriter, req *http.Request)
 		}
 	}
 
-	sm.hlsServerHandler.ServeHTTP(writer, req)
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-
-func firstExistDefaultConfFilename() string {
-	for _, dcf := range DefaultConfFilenameList {
-		fi, err := os.Stat(dcf)
-		if err == nil && fi.Size() > 0 && !fi.IsDir() {
-			nazalog.Warnf("%s exist. using it as config file.", dcf)
-			return dcf
-		} else {
-			nazalog.Warnf("%s not exist.", dcf)
-		}
+	remoteIp, _, err := net.SplitHostPort(req.RemoteAddr)
+	if err != nil {
+		Log.Warnf("SplitHostPort failed. addr=%s, err=%+v", req.RemoteAddr, err)
+		return
 	}
-	return ""
+
+	if sm.ipBlacklist.Has(remoteIp) {
+		//Log.Warnf("found %s in ip blacklist, so do not serve this request.", remoteIp)
+
+		sm.hlsServerHandler.CloseSubSessionIfExist(req)
+
+		writer.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	sm.hlsServerHandler.ServeHTTP(writer, req)
 }

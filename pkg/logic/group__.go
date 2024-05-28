@@ -314,6 +314,7 @@ func (group *Group) GetStat(maxsub int) base.StatGroup {
 		group.stat.StatSubs = append(group.stat.StatSubs, base.Session2StatSub(s))
 	}
 
+	//Log.Debugf("GetStat. len(group.hlsSubSessionSet)=%d", len(group.hlsSubSessionSet))
 	for s := range group.hlsSubSessionSet {
 		statSubCount++
 		if statSubCount > maxsub {
@@ -373,6 +374,13 @@ func (group *Group) KickSession(sessionId string) bool {
 		}
 	} else if strings.HasPrefix(sessionId, base.UkPreRtspSubSession) {
 		for s := range group.rtspSubSessionSet {
+			if s.UniqueKey() == sessionId {
+				s.Dispose()
+				return true
+			}
+		}
+	} else if strings.HasPrefix(sessionId, base.UkPreHlsSubSession) {
+		for s := range group.hlsSubSessionSet {
 			if s.UniqueKey() == sessionId {
 				s.Dispose()
 				return true

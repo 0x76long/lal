@@ -80,23 +80,34 @@ func (s *ServerHandler) ServeHTTPWithUrlCtx(resp http.ResponseWriter, req *http.
 	if s.isSubSessionModeEnable() {
 		sessionIdHash = urlObj.Query().Get("session_id")
 		if filetype == "ts" && sessionIdHash != "" {
-			// 注意，为了增强容错性，不管是session_id字段无效，还是session_id为空，我们都依然返回ts文件内容给播放端
 			if sessionIdHash != "" {
 				err = s.keepSessionAlive(sessionIdHash)
 				if err != nil {
 					Log.Warnf("keepSessionAlive failed. session=%s, err=%+v", sessionIdHash, err)
+					resp.WriteHeader(http.StatusNotFound)
+					return
 				}
 			} else {
-				// noop
+				Log.Warnf("session_id not exist. session=%s, err=%+v", sessionIdHash, err)
+				resp.WriteHeader(http.StatusNotFound)
+				return
 			}
 		} else if filetype == "m3u8" {
+			neededRedirect := false
+
 			if sessionIdHash != "" {
 				err = s.keepSessionAlive(sessionIdHash)
 				if err != nil {
 					Log.Warnf("keepSessionAlive failed. session=%s, err=%+v", sessionIdHash, err)
+					resp.WriteHeader(http.StatusNotFound)
+					return
 				}
 			} else {
-				// m3u8请求时，session_id不存在，创建session对象，并让m3u8跳转到携带session_id的url请求
+				neededRedirect = true
+			}
+
+			if neededRedirect {
+				// 创建session对象，并让m3u8跳转到携带session_id的url请求
 
 				session, err := s.createSubSession(req, urlCtx)
 				if err != nil {
@@ -194,11 +205,32 @@ func (s *ServerHandler) clearExpireSession() {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	for sessionIdHash, session := range s.sessionMap {
-		if session.IsExpired() {
+		if session.IsExpired() || session.IsDisposed() {
 			delete(s.sessionMap, sessionIdHash)
 			s.observer.OnDelHlsSubSession(session)
 		}
 	}
+}
+
+func (s *ServerHandler) CloseSubSessionIfExist(req *http.Request) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	urlCtx, err := base.ParseUrl(base.ParseHttpRequest(req), 80)
+	if err != nil {
+		Log.Errorf("parse url. err=%+v", err)
+		return
+	}
+
+	urlObj, _ := url.Parse(urlCtx.Url)
+	sessionIdHash := urlObj.Query().Get("session_id")
+
+	session := s.sessionMap[sessionIdHash]
+	if session == nil {
+		return
+	}
+	delete(s.sessionMap, sessionIdHash)
+	s.observer.OnDelHlsSubSession(session)
 }
 
 func (s *ServerHandler) isSubSessionModeEnable() bool {
