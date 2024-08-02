@@ -142,8 +142,8 @@ func NewClientSession(sessionType base.SessionType, modOptions ...ModClientSessi
 	return s
 }
 
-// Do 阻塞直到收到服务端返回的 publish / play 对应结果的信令或者发生错误
-func (s *ClientSession) Do(rawUrl string) error {
+// Start 阻塞直到收到服务端返回的 publish / play 对应结果的信令或者发生错误
+func (s *ClientSession) Start(rawUrl string) error {
 	Log.Debugf("[%s] Do. url=%s", s.UniqueKey(), rawUrl)
 
 	var (
@@ -162,6 +162,9 @@ func (s *ClientSession) Do(rawUrl string) error {
 	}
 
 	err := s.doContext(ctx)
+	if err != nil {
+		_ = s.dispose(err)
+	}
 
 	return err
 }

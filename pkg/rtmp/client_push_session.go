@@ -64,9 +64,14 @@ func NewPushSession(modOptions ...ModPushSessionOption) *PushSession {
 	}
 }
 
-// Push 阻塞直到和对端完成推流前，握手部分的工作（也即收到RTMP Publish response），或者发生错误
+// Start 阻塞直到和对端完成推流前，握手部分的工作（也即收到RTMP Publish response），或者发生错误
+func (s *PushSession) Start(rawUrl string) error {
+	return s.core.Start(rawUrl)
+}
+
+// Push deprecated. use Start instead.
 func (s *PushSession) Push(rawUrl string) error {
-	return s.core.Do(rawUrl)
+	return s.Start(rawUrl)
 }
 
 // Write 发送数据
@@ -110,6 +115,8 @@ func (s *PushSession) WaitChan() <-chan error {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// ISessionUrlContext interface
+// ---------------------------------------------------------------------------------------------------------------------
 
 // Url 文档请参考： interface ISessionUrlContext
 func (s *PushSession) Url() string {
@@ -131,12 +138,18 @@ func (s *PushSession) RawQuery() string {
 	return s.core.RawQuery()
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// IObject interface
+// ---------------------------------------------------------------------------------------------------------------------
+
 // UniqueKey 文档请参考： interface IObject
 func (s *PushSession) UniqueKey() string {
 	return s.core.UniqueKey()
 }
 
-// ----- ISessionStat --------------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------------------------------
+// ISessionStat interface
+// ---------------------------------------------------------------------------------------------------------------------
 
 // GetStat 文档请参考： interface ISessionStat
 func (s *PushSession) GetStat() base.StatSession {

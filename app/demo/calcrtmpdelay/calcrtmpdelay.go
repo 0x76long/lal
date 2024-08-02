@@ -66,7 +66,7 @@ func main() {
 	pushSession := rtmp.NewPushSession(func(option *rtmp.PushSessionOption) {
 		option.PushTimeoutMs = 10000
 	})
-	err := pushSession.Push(pushUrl)
+	err := pushSession.Start(pushUrl)
 	if err != nil {
 		nazalog.Fatalf("push rtmp failed. url=%s, err=%+v", pushUrl, err)
 	}
@@ -92,12 +92,12 @@ func main() {
 
 	switch pullType {
 	case PullTypeHttpflv:
-		httpflvPullSession = httpflv.NewPullSession()
-		err = httpflvPullSession.Pull(pullUrl, func(tag httpflv.Tag) {
+		httpflvPullSession = httpflv.NewPullSession().WithOnReadFlvTag(func(tag httpflv.Tag) {
 			handleReadPayloadFn(tag.Payload())
 		})
-		if err != nil {
+		if err = httpflvPullSession.Start(pullUrl); err != nil {
 			nazalog.Fatalf("pull flv failed. err=%+v", err)
+			return
 		}
 		nazalog.Info("pull flv succ.")
 		defer httpflvPullSession.Dispose()
@@ -105,7 +105,7 @@ func main() {
 		rtmpPullSession = rtmp.NewPullSession().WithOnReadRtmpAvMsg(func(msg base.RtmpMsg) {
 			handleReadPayloadFn(msg.Payload)
 		})
-		err = rtmpPullSession.Pull(pullUrl)
+		err = rtmpPullSession.Start(pullUrl)
 		if err != nil {
 			nazalog.Fatalf("pull rtmp failed. err=%+v", err)
 		}

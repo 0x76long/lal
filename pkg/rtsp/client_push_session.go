@@ -32,6 +32,8 @@ type PushSession struct {
 	cmdSession     *ClientCommandSession
 	baseOutSession *BaseOutSession
 
+	sdpCtx *sdp.LogicContext
+
 	disposeOnce sync.Once
 	waitChan    chan error
 }
@@ -58,12 +60,149 @@ func NewPushSession(modOptions ...ModPushSessionOption) *PushSession {
 	return s
 }
 
-// Push 阻塞直到和对端完成推流前，握手部分的工作（也即收到RTSP Record response），或者发生错误
+func (session *PushSession) WithSdpLogicContext(sdpCtx sdp.LogicContext) *PushSession {
+	session.sdpCtx = &sdp.LogicContext{}
+	*session.sdpCtx = sdpCtx
+	return session
+}
+
+// Start 阻塞直到和对端完成推流前，握手部分的工作（也即收到RTSP Record response），或者发生错误
+func (session *PushSession) Start(rawUrl string) error {
+	if session.sdpCtx == nil {
+		Log.Errorf("[%s] sdp logic context not set.", session)
+		return base.ErrRtsp
+	}
+	return session.push(rawUrl)
+}
+
+// Push deprecated. use WithSdpLogicContext and Start instead.
 func (session *PushSession) Push(rawUrl string, sdpCtx sdp.LogicContext) error {
+	return session.WithSdpLogicContext(sdpCtx).Start(rawUrl)
+}
+
+func (session *PushSession) WriteRtpPacket(packet rtprtcp.RtpPacket) error {
+	return session.baseOutSession.WriteRtpPacket(packet)
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// IClientSessionLifecycle interface
+// ---------------------------------------------------------------------------------------------------------------------
+
+// Dispose 文档请参考： IClientSessionLifecycle interface
+func (session *PushSession) Dispose() error {
+	return session.dispose(nil)
+}
+
+// WaitChan 文档请参考： IClientSessionLifecycle interface
+func (session *PushSession) WaitChan() <-chan error {
+	return session.waitChan
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// ISessionUrlContext interface
+// ---------------------------------------------------------------------------------------------------------------------
+
+// Url 文档请参考： interface ISessionUrlContext
+func (session *PushSession) Url() string {
+	return session.cmdSession.Url()
+}
+
+// AppName 文档请参考： interface ISessionUrlContext
+func (session *PushSession) AppName() string {
+	return session.cmdSession.AppName()
+}
+
+// StreamName 文档请参考： interface ISessionUrlContext
+func (session *PushSession) StreamName() string {
+	return session.cmdSession.StreamName()
+}
+
+// RawQuery 文档请参考： interface ISessionUrlContext
+func (session *PushSession) RawQuery() string {
+	return session.cmdSession.RawQuery()
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// ISessionUrlContext IObject
+// ---------------------------------------------------------------------------------------------------------------------
+
+// UniqueKey 文档请参考： interface IObject
+func (session *PushSession) UniqueKey() string {
+	return session.baseOutSession.UniqueKey()
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// ISessionStat IObject
+// ---------------------------------------------------------------------------------------------------------------------
+
+// GetStat 文档请参考： interface ISessionStat
+func (session *PushSession) GetStat() base.StatSession {
+	stat := session.baseOutSession.GetStat()
+	stat.RemoteAddr = session.cmdSession.RemoteAddr()
+	return stat
+}
+
+// UpdateStat 文档请参考： interface ISessionStat
+func (session *PushSession) UpdateStat(intervalSec uint32) {
+	session.baseOutSession.UpdateStat(intervalSec)
+}
+
+// IsAlive 文档请参考： interface ISessionStat
+func (session *PushSession) IsAlive() (readAlive, writeAlive bool) {
+	return session.baseOutSession.IsAlive()
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// ISessionStat IClientCommandSessionObserver
+// ---------------------------------------------------------------------------------------------------------------------
+
+// OnConnectResult callback by ClientCommandSession
+func (session *PushSession) OnConnectResult() {
+	// noop
+}
+
+// OnDescribeResponse callback by ClientCommandSession
+func (session *PushSession) OnDescribeResponse(sdpCtx sdp.LogicContext) {
+	// noop
+}
+
+// OnSetupWithConn callback by ClientCommandSession
+func (session *PushSession) OnSetupWithConn(uri string, rtpConn, rtcpConn *nazanet.UdpConnection) {
+	_ = session.baseOutSession.SetupWithConn(uri, rtpConn, rtcpConn)
+}
+
+// OnSetupWithChannel callback by ClientCommandSession
+func (session *PushSession) OnSetupWithChannel(uri string, rtpChannel, rtcpChannel int) {
+	_ = session.baseOutSession.SetupWithChannel(uri, rtpChannel, rtcpChannel)
+}
+
+// OnSetupResult callback by ClientCommandSession
+func (session *PushSession) OnSetupResult() {
+	// noop
+}
+
+// OnInterleavedPacket callback by ClientCommandSession
+func (session *PushSession) OnInterleavedPacket(packet []byte, channel int) {
+	session.baseOutSession.HandleInterleavedPacket(packet, channel)
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// ISessionStat IInterleavedPacketWriter
+// ---------------------------------------------------------------------------------------------------------------------
+
+// WriteInterleavedPacket callback by BaseOutSession
+func (session *PushSession) WriteInterleavedPacket(packet []byte, channel int) error {
+	return session.cmdSession.WriteInterleavedPacket(packet, channel)
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+
+func (session *PushSession) push(rawUrl string) error {
 	Log.Debugf("[%s] push. url=%s", session.UniqueKey(), rawUrl)
-	session.cmdSession.InitWithSdp(sdpCtx)
-	session.baseOutSession.InitWithSdp(sdpCtx)
-	if err := session.cmdSession.Do(rawUrl); err != nil {
+	session.cmdSession.InitWithSdp(*session.sdpCtx)
+	session.baseOutSession.InitWithSdp(*session.sdpCtx)
+	if err := session.cmdSession.Start(rawUrl); err != nil {
+		_ = session.dispose(err)
 		return err
 	}
 
@@ -108,107 +247,6 @@ func (session *PushSession) Push(rawUrl string, sdpCtx sdp.LogicContext) error {
 	}()
 
 	return nil
-}
-
-func (session *PushSession) WriteRtpPacket(packet rtprtcp.RtpPacket) error {
-	return session.baseOutSession.WriteRtpPacket(packet)
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-// IClientSessionLifecycle interface
-// ---------------------------------------------------------------------------------------------------------------------
-
-// Dispose 文档请参考： IClientSessionLifecycle interface
-func (session *PushSession) Dispose() error {
-	return session.dispose(nil)
-}
-
-// WaitChan 文档请参考： IClientSessionLifecycle interface
-func (session *PushSession) WaitChan() <-chan error {
-	return session.waitChan
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-
-// Url 文档请参考： interface ISessionUrlContext
-func (session *PushSession) Url() string {
-	return session.cmdSession.Url()
-}
-
-// AppName 文档请参考： interface ISessionUrlContext
-func (session *PushSession) AppName() string {
-	return session.cmdSession.AppName()
-}
-
-// StreamName 文档请参考： interface ISessionUrlContext
-func (session *PushSession) StreamName() string {
-	return session.cmdSession.StreamName()
-}
-
-// RawQuery 文档请参考： interface ISessionUrlContext
-func (session *PushSession) RawQuery() string {
-	return session.cmdSession.RawQuery()
-}
-
-// UniqueKey 文档请参考： interface IObject
-func (session *PushSession) UniqueKey() string {
-	return session.baseOutSession.UniqueKey()
-}
-
-// ----- ISessionStat --------------------------------------------------------------------------------------------------
-
-// GetStat 文档请参考： interface ISessionStat
-func (session *PushSession) GetStat() base.StatSession {
-	stat := session.baseOutSession.GetStat()
-	stat.RemoteAddr = session.cmdSession.RemoteAddr()
-	return stat
-}
-
-// UpdateStat 文档请参考： interface ISessionStat
-func (session *PushSession) UpdateStat(intervalSec uint32) {
-	session.baseOutSession.UpdateStat(intervalSec)
-}
-
-// IsAlive 文档请参考： interface ISessionStat
-func (session *PushSession) IsAlive() (readAlive, writeAlive bool) {
-	return session.baseOutSession.IsAlive()
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-
-// OnConnectResult IClientCommandSessionObserver, callback by ClientCommandSession
-func (session *PushSession) OnConnectResult() {
-	// noop
-}
-
-// OnDescribeResponse IClientCommandSessionObserver, callback by ClientCommandSession
-func (session *PushSession) OnDescribeResponse(sdpCtx sdp.LogicContext) {
-	// noop
-}
-
-// OnSetupWithConn IClientCommandSessionObserver, callback by ClientCommandSession
-func (session *PushSession) OnSetupWithConn(uri string, rtpConn, rtcpConn *nazanet.UdpConnection) {
-	_ = session.baseOutSession.SetupWithConn(uri, rtpConn, rtcpConn)
-}
-
-// OnSetupWithChannel IClientCommandSessionObserver, callback by ClientCommandSession
-func (session *PushSession) OnSetupWithChannel(uri string, rtpChannel, rtcpChannel int) {
-	_ = session.baseOutSession.SetupWithChannel(uri, rtpChannel, rtcpChannel)
-}
-
-// OnSetupResult IClientCommandSessionObserver, callback by ClientCommandSession
-func (session *PushSession) OnSetupResult() {
-	// noop
-}
-
-// OnInterleavedPacket IClientCommandSessionObserver, callback by ClientCommandSession
-func (session *PushSession) OnInterleavedPacket(packet []byte, channel int) {
-	session.baseOutSession.HandleInterleavedPacket(packet, channel)
-}
-
-// WriteInterleavedPacket IInterleavedPacketWriter, callback by BaseOutSession
-func (session *PushSession) WriteInterleavedPacket(packet []byte, channel int) error {
-	return session.cmdSession.WriteInterleavedPacket(packet, channel)
 }
 
 func (session *PushSession) dispose(err error) error {

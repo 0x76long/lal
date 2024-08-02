@@ -43,6 +43,8 @@ type PullSession struct {
 	conn        connection.Connection
 	sessionStat base.BasicSessionStat
 
+	onReadFlvTag OnReadFlvTag
+
 	urlCtx base.UrlContext
 
 	disposeOnce sync.Once
@@ -67,29 +69,31 @@ func NewPullSession(modOptions ...ModPullSessionOption) *PullSession {
 // OnReadFlvTag @param tag: 底层保证回调上来的Raw数据长度是完整的（但是不会分析Raw内部的编码数据）
 type OnReadFlvTag func(tag Tag)
 
-// Pull 阻塞直到和对端完成拉流前，握手部分的工作，或者发生错误。
+// WithOnReadFlvTag
+//
+// @param onReadFlvTag 读取到 flv tag 数据时回调。回调结束后，PullSession 不会再使用这块 <tag> 数据。
+func (session *PullSession) WithOnReadFlvTag(onReadFlvTag OnReadFlvTag) *PullSession {
+	session.onReadFlvTag = onReadFlvTag
+	return session
+}
+
+// Start 阻塞直到和对端完成拉流前，握手部分的工作，或者发生错误。
 //
 // 注意，握手指的是发送完HTTP Request，不包含接收任何数据，因为有的httpflv服务端，如果流不存在不会发送任何内容，此时我们也应该认为是握手完成了。
 //
 // @param rawUrl 支持如下两种格式（当然，关键点是对端支持）：
 //  1. `http://{domain}/{app_name}/{stream_name}.flv`
 //  2. `http://{ip}/{domain}/{app_name}/{stream_name}.flv`
-//
-// @param onReadFlvTag 读取到 flv tag 数据时回调。回调结束后，PullSession 不会再使用这块 <tag> 数据。
-func (session *PullSession) Pull(rawUrl string, onReadFlvTag OnReadFlvTag) error {
-	Log.Debugf("[%s] pull. url=%s", session.UniqueKey(), rawUrl)
-
-	var (
-		ctx    context.Context
-		cancel context.CancelFunc
-	)
-	if session.option.PullTimeoutMs == 0 {
-		ctx, cancel = context.WithCancel(context.Background())
-	} else {
-		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(session.option.PullTimeoutMs)*time.Millisecond)
+func (session *PullSession) Start(rawUrl string) error {
+	if session.onReadFlvTag == nil {
+		Log.Warnf("[%s] Start. onReadFlvTag not set.", session.UniqueKey())
 	}
-	defer cancel()
-	return session.pullContext(ctx, rawUrl, onReadFlvTag)
+	return session.pull(rawUrl)
+}
+
+// Pull deprecated. use WithOnReadFlvTag and Start instead.
+func (session *PullSession) Pull(rawUrl string, onReadFlvTag OnReadFlvTag) error {
+	return session.WithOnReadFlvTag(onReadFlvTag).Start(rawUrl)
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -106,6 +110,8 @@ func (session *PullSession) WaitChan() <-chan error {
 	return session.conn.Done()
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// ISessionUrlContext interface
 // ---------------------------------------------------------------------------------------------------------------------
 
 // Url 文档请参考： interface ISessionUrlContext
@@ -128,12 +134,18 @@ func (session *PullSession) RawQuery() string {
 	return session.urlCtx.RawQuery
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// IObject interface
+// ---------------------------------------------------------------------------------------------------------------------
+
 // UniqueKey 文档请参考： interface IObject
 func (session *PullSession) UniqueKey() string {
 	return session.sessionStat.UniqueKey()
 }
 
-// ----- ISessionStat --------------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------------------------------
+// ISessionStat interface
+// ---------------------------------------------------------------------------------------------------------------------
 
 // UpdateStat 文档请参考： interface ISessionStat
 func (session *PullSession) UpdateStat(intervalSec uint32) {
@@ -151,6 +163,27 @@ func (session *PullSession) IsAlive() (readAlive, writeAlive bool) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+
+func (session *PullSession) pull(rawUrl string) error {
+	Log.Debugf("[%s] pull. url=%s", session.UniqueKey(), rawUrl)
+
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
+	if session.option.PullTimeoutMs == 0 {
+		ctx, cancel = context.WithCancel(context.Background())
+	} else {
+		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(session.option.PullTimeoutMs)*time.Millisecond)
+	}
+	defer cancel()
+
+	err := session.pullContext(ctx, rawUrl, session.onReadFlvTag)
+	if err != nil {
+		_ = session.dispose(err)
+	}
+	return err
+}
 
 func (session *PullSession) pullContext(ctx context.Context, rawUrl string, onReadFlvTag OnReadFlvTag) error {
 	errChan := make(chan error, 1)
@@ -303,7 +336,9 @@ func (session *PullSession) runReadLoop(onReadFlvTag OnReadFlvTag) {
 		if err != nil {
 			return
 		}
-		onReadFlvTag(tag)
+		if onReadFlvTag != nil {
+			onReadFlvTag(tag)
+		}
 	}
 }
 

@@ -74,10 +74,11 @@ func (session *PullSession) WithOnDescribeResponse(onDescribeResponse func()) *P
 	return session
 }
 
-// Pull 阻塞直到和对端完成拉流前，握手部分的工作（也即收到RTSP Play response），或者发生错误
-func (session *PullSession) Pull(rawUrl string) error {
+// Start 阻塞直到和对端完成拉流前，握手部分的工作（也即收到RTSP Play response），或者发生错误
+func (session *PullSession) Start(rawUrl string) error {
 	Log.Debugf("[%s] pull. url=%s", session.UniqueKey(), rawUrl)
-	if err := session.cmdSession.Do(rawUrl); err != nil {
+	if err := session.cmdSession.Start(rawUrl); err != nil {
+		_ = session.dispose(err)
 		return err
 	}
 
@@ -127,6 +128,11 @@ func (session *PullSession) Pull(rawUrl string) error {
 	return nil
 }
 
+// Pull deprecated. use Start instead.
+func (session *PullSession) Pull(rawUrl string) error {
+	return session.Start(rawUrl)
+}
+
 func (session *PullSession) GetSdp() sdp.LogicContext {
 	return session.baseInSession.GetSdp()
 }
@@ -145,6 +151,8 @@ func (session *PullSession) WaitChan() <-chan error {
 	return session.waitChan
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// ISessionUrlContext interface
 // ---------------------------------------------------------------------------------------------------------------------
 
 // Url 文档请参考： interface ISessionUrlContext
@@ -167,12 +175,18 @@ func (session *PullSession) RawQuery() string {
 	return session.cmdSession.RawQuery()
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// IObject interface
+// ---------------------------------------------------------------------------------------------------------------------
+
 // UniqueKey 文档请参考： interface IObject
 func (session *PullSession) UniqueKey() string {
 	return session.baseInSession.UniqueKey()
 }
 
-// ----- ISessionStat --------------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------------------------------
+// ISessionStat interface
+// ---------------------------------------------------------------------------------------------------------------------
 
 // GetStat 文档请参考： interface ISessionStat
 func (session *PullSession) GetStat() base.StatSession {
@@ -192,42 +206,50 @@ func (session *PullSession) IsAlive() (readAlive, writeAlive bool) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// IClientCommandSessionObserver interface
+// ---------------------------------------------------------------------------------------------------------------------
 
-// OnConnectResult IClientCommandSessionObserver, callback by ClientCommandSession
+// OnConnectResult callback by ClientCommandSession
 func (session *PullSession) OnConnectResult() {
 	// noop
 }
 
-// OnDescribeResponse IClientCommandSessionObserver, callback by ClientCommandSession
+// OnDescribeResponse callback by ClientCommandSession
 func (session *PullSession) OnDescribeResponse(sdpCtx sdp.LogicContext) {
 	session.onDescribeResponse()
 	session.baseInSession.InitWithSdp(sdpCtx)
 }
 
-// OnSetupWithConn IClientCommandSessionObserver, callback by ClientCommandSession
+// OnSetupWithConn callback by ClientCommandSession
 func (session *PullSession) OnSetupWithConn(uri string, rtpConn, rtcpConn *nazanet.UdpConnection) {
 	_ = session.baseInSession.SetupWithConn(uri, rtpConn, rtcpConn)
 }
 
-// OnSetupWithChannel IClientCommandSessionObserver, callback by ClientCommandSession
+// OnSetupWithChannel callback by ClientCommandSession
 func (session *PullSession) OnSetupWithChannel(uri string, rtpChannel, rtcpChannel int) {
 	_ = session.baseInSession.SetupWithChannel(uri, rtpChannel, rtcpChannel)
 }
 
-// OnSetupResult IClientCommandSessionObserver, callback by ClientCommandSession
+// OnSetupResult callback by ClientCommandSession
 func (session *PullSession) OnSetupResult() {
 	session.baseInSession.WriteRtpRtcpDummy()
 }
 
-// OnInterleavedPacket IClientCommandSessionObserver, callback by ClientCommandSession
+// OnInterleavedPacket callback by ClientCommandSession
 func (session *PullSession) OnInterleavedPacket(packet []byte, channel int) {
 	session.baseInSession.HandleInterleavedPacket(packet, channel)
 }
 
-// WriteInterleavedPacket IInterleavedPacketWriter, callback by BaseInSession
+// ---------------------------------------------------------------------------------------------------------------------
+// IInterleavedPacketWriter interface
+// ---------------------------------------------------------------------------------------------------------------------
+
+// WriteInterleavedPacket callback by BaseInSession
 func (session *PullSession) WriteInterleavedPacket(packet []byte, channel int) error {
 	return session.cmdSession.WriteInterleavedPacket(packet, channel)
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
 
 func (session *PullSession) dispose(err error) error {
 	var retErr error

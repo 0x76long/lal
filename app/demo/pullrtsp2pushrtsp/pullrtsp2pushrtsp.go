@@ -65,7 +65,7 @@ func (r *RtspTunnel) Start() error {
 		option.PullTimeoutMs = 10000
 		option.OverTcp = r.pullOverTcp
 	})
-	if err := r.pullSession.Pull(r.pullUrl); err != nil {
+	if err := r.pullSession.Start(r.pullUrl); err != nil {
 		nazalog.Errorf("[%s] start pull failed. err=%+v, url=%s", r.uniqueKey, err, r.pullUrl)
 		return err
 	}
@@ -75,8 +75,8 @@ func (r *RtspTunnel) Start() error {
 	r.pushSession = rtsp.NewPushSession(func(option *rtsp.PushSessionOption) {
 		option.PushTimeoutMs = 10000
 		option.OverTcp = r.pushOverTcp
-	})
-	if err := r.pushSession.Push(r.pushUrl, sdpCtx); err != nil {
+	}).WithSdpLogicContext(sdpCtx)
+	if err := r.pushSession.Start(r.pushUrl); err != nil {
 		nazalog.Errorf("[%s] start push failed. err=%+v, url=%s", r.uniqueKey, err, r.pushUrl)
 		return err
 	}
